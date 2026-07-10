@@ -11,11 +11,23 @@ A high-performance Rust port of the **Antigravity Proxy** (originally built in B
 *   **Static Admin Dashboard**: Real-time credit monitoring, account diagnostics, strategy adjustments, and console output visualization.
 *   **Password Authorization**: Access control using `PROXY_PASSWORD` or configuration settings.
 
+## 📊 Codebase Consolidation & Shrinkage
+
+The port from Bun/TypeScript to Rust achieved a massive cleanup and structural consolidation of the codebase:
+
+| Metric | Original Bun/TypeScript | Ported Rust (Cargo) | Change |
+|---|---|---|---|
+| **Source Directory Files** | 30 files (nested across 5 folders) | **6 files** (flat in `src/`) | **-80% file reduction** |
+| **Runtime Dependencies** | Node modules (`node_modules/` space) | Compiled standalone binary | Zero external runtime node modules |
+| **Memory Footprint** | Dynamic V8/Bun engine overhead | Low-overhead zero-cost abstractions | Extremely lightweight |
+
+All complex logic—including token rotation, PKCE verifiers, synthetic search routing, and custom SSE framing—was simplified from multiple scattered files into 5 cohesive Rust modules (`config`, `auth`, `utils`, `quota`, `lib`) managed by a single entry point (`main`).
+
 ---
 
 ## 🛠️ Prerequisites
 
-*   Rust & Cargo installed (edition 2021)
+*   Rust & Cargo installed (edition 2024)
 *   Google Cloud OAuth credential setups
 
 ---
