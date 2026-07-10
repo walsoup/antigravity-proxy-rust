@@ -800,7 +800,7 @@ pub fn transform_to_google_body(
             if let Some(parts) = c.get("parts").and_then(|p| p.as_array()) {
                 for p in parts {
                     if let Some(txt) = p.get("text").and_then(|t| t.as_str()) {
-                        c_chars += txt.len();
+                        c_chars += txt.chars().count();
                     }
                 }
             }
@@ -810,8 +810,11 @@ pub fn transform_to_google_body(
                     if let Some(parts) = final_contents[i].get_mut("parts").and_then(|p| p.as_array_mut()) {
                         for p in parts {
                             if let Some(txt) = p.get("text").and_then(|t| t.as_str()) {
-                                if txt.len() > (max_total_chars - total_chars) {
-                                    let trunc = format!("{}\n\n[TRUNCATED BY SAFEGUARD]", &txt[0..max_total_chars - total_chars]);
+                                let char_count = txt.chars().count();
+                                if char_count > (max_total_chars - total_chars) {
+                                    let allowed = max_total_chars - total_chars;
+                                    let trunc_str: String = txt.chars().take(allowed).collect();
+                                    let trunc = format!("{}\n\n[TRUNCATED BY SAFEGUARD]", trunc_str);
                                     *p = serde_json::json!({ "text": trunc });
                                 }
                             }
