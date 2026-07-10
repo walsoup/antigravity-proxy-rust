@@ -1,8 +1,8 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Path, Query},
     http::{header, HeaderMap, StatusCode},
-    response::{sse::Event, IntoResponse, Response, Sse, Redirect},
+    response::{sse::Event, IntoResponse, Response, Sse},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
@@ -20,13 +20,12 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use once_cell::sync::Lazy;
 use sha2::{Sha256, Digest};
-use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 
 use antigravity_proxy_rust::config::{get_proxy_config, load_proxy_config, update_proxy_config, get_effective_features};
 use antigravity_proxy_rust::auth::{
-    get_accounts, get_strategy, set_strategy, save_accounts_config,
+    get_accounts, get_strategy, set_strategy,
     reset_all_cooldowns, remove_account, reset_account, get_project_id,
     update_account_project, mark_cooldown, purge_system_state, add_account,
     generate_verifier, generate_auth_url, exchange_code, get_user_email,
@@ -38,8 +37,8 @@ use antigravity_proxy_rust::auth::{
 use antigravity_proxy_rust::quota::{fetch_quota, refresh_all_quotas, SUPPORTED_MODELS_CACHE};
 use antigravity_proxy_rust::utils::{
     transform_to_google_body, transform_google_event_to_openai, detect_loop,
-    parse_google_error, get_exact_cache, set_exact_cache, cache_signature,
-    StreamState, OpenAICompletionChunk, hash_string,
+    parse_google_error, get_exact_cache, cache_signature,
+    StreamState, hash_string,
 };
 
 static LOG_BUFFER: Lazy<RwLock<Vec<String>>> = Lazy::new(|| RwLock::new(Vec::new()));
@@ -91,6 +90,7 @@ static GLOBAL_LAST_USED_MODEL_FAMILY: Lazy<RwLock<Option<String>>> = Lazy::new(|
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     let config_path = "config.json";
     load_proxy_config(config_path);
     
@@ -1229,9 +1229,9 @@ fn pipe_stream_events(
     request_id: String,
     session_id: String,
     headers: HeaderMap,
-    email: String,
-    use_cli_pool: bool,
-    client_id: String,
+    _email: String,
+    _use_cli_pool: bool,
+    _client_id: String,
     internal_retry_count: u32,
 ) -> BoxFuture<'static, Result<(), String>> {
     async move {
@@ -1242,7 +1242,7 @@ fn pipe_stream_events(
         let mut accumulated_thought = String::new();
         let mut accumulated_content = String::new();
         let mut latest_signature = String::new();
-        let mut loop_detected = false;
+        let loop_detected = false;
         let mut finish_event_line: Option<String> = None;
         let mut recent_content_buffer = String::new();
         let mut is_halted = false;
@@ -1321,7 +1321,7 @@ fn pipe_stream_events(
                                 // Recursively execute internal completion with retry count incremented
                                 let inner_res = handle_chat_completion_internal(client_headers, HashMap::new(), retry_body).await;
                                 match inner_res {
-                                    Ok(response) => {
+                                    Ok(_response) => {
                                         // Pipe new stream directly into tx
                                         log_info!("Retried stream established, redirecting output...");
                                         // We'd copy the stream here. For simplicity, we just log and exit.

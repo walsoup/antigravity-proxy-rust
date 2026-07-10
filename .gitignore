@@ -6,3 +6,4 @@ antigravity-accounts.json
 config.json
 proxy_error.log
 proxy_error.log.old
+.env
