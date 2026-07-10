@@ -1,5 +1,7 @@
 # Antigravity Proxy (Rust)
 
+![Antigravity Console Dashboard](dashboard_mockup.png)
+
 A high-performance Rust port of the **Antigravity Proxy** (originally built in Bun/TypeScript). It translates OpenAI-compatible chat completion payload requests into Google Cloud PA API calls (`v1internal:streamGenerateContent`) with advanced account rotation, capabilities classification, response streaming, loop interception, and credit quota tracking.
 
 ## 🚀 Key Features
