@@ -975,7 +975,7 @@ pub static OAUTH_SETTINGS: Lazy<OAuthConfig> = Lazy::new(|| {
 
 pub fn generate_verifier() -> String {
     let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen::<u8>()).collect();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen::<u8>()).collect();
     hex::encode(bytes)
 }
 
@@ -1169,14 +1169,14 @@ pub fn generate_fingerprint_for_email(email: Option<&str>) -> DeviceFingerprint 
             format!("device-{}", &hash[0..16])
         }
         None => {
-            let rand_bytes: Vec<u8> = (0..8).map(|_| rng.gen::<u8>()).collect();
+            let rand_bytes: Vec<u8> = (0..8).map(|_| rng.r#gen::<u8>()).collect();
             format!("device-{}", hex::encode(rand_bytes))
         }
     };
 
     let device_id = quota_user.replace("device-", "");
     let session_token = {
-        let rand_bytes: Vec<u8> = (0..16).map(|_| rng.gen::<u8>()).collect();
+        let rand_bytes: Vec<u8> = (0..16).map(|_| rng.r#gen::<u8>()).collect();
         hex::encode(rand_bytes)
     };
 
