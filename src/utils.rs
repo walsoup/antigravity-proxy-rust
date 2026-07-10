@@ -1190,8 +1190,8 @@ pub fn transform_google_event_to_openai(
                 if clean_text.contains("thoughtSignature:") {
                     let re_sig = regex::Regex::new(r"thoughtSignature:[a-zA-Z0-9\-_]+").unwrap();
                     clean_text = re_sig.replace_all(&clean_text, "").to_string();
+                    clean_text = clean_text.trim().to_string();
                 }
-                clean_text = clean_text.trim().to_string();
 
                 if !clean_text.is_empty() {
                     if is_thought {
