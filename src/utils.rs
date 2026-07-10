@@ -1351,17 +1351,18 @@ pub fn transform_google_event_to_openai(
 // --- Loop Detector ---
 
 pub fn detect_loop(text: &str) -> bool {
-    let len = text.len();
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
     if len < 50 {
         return false;
     }
 
-    let check_repeat = |text: &str, pattern_size: usize, min_repeats: usize| -> bool {
+    let check_repeat = |chars_slice: &[char], pattern_size: usize, min_repeats: usize| -> bool {
         let required_len = pattern_size * min_repeats;
-        if text.len() < required_len {
+        if chars_slice.len() < required_len {
             return false;
         }
-        let suffix = &text[text.len() - required_len..];
+        let suffix = &chars_slice[chars_slice.len() - required_len..];
         let pattern = &suffix[suffix.len() - pattern_size..];
         for i in 0..min_repeats {
             let start = i * pattern_size;
@@ -1374,21 +1375,21 @@ pub fn detect_loop(text: &str) -> bool {
         true
     };
 
-    if check_repeat(text, 1, 25) || check_repeat(text, 2, 25) || check_repeat(text, 3, 25) || check_repeat(text, 4, 25) {
+    if check_repeat(&chars, 1, 25) || check_repeat(&chars, 2, 25) || check_repeat(&chars, 3, 25) || check_repeat(&chars, 4, 25) {
         return true;
     }
     for p in 5..=15 {
-        if check_repeat(text, p, 10) {
+        if check_repeat(&chars, p, 10) {
             return true;
         }
     }
     for p in 16..=50 {
-        if check_repeat(text, p, 5) {
+        if check_repeat(&chars, p, 5) {
             return true;
         }
     }
     for p in 51..=200 {
-        if check_repeat(text, p, 3) {
+        if check_repeat(&chars, p, 3) {
             return true;
         }
     }
