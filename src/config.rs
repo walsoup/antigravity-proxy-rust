@@ -6,7 +6,7 @@ use std::sync::RwLock;
 use once_cell::sync::Lazy;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ProxyConfig {
     pub rotation: RotationConfig,
     pub scoring: ScoringConfig,
@@ -18,24 +18,25 @@ pub struct ProxyConfig {
     pub logging: LoggingConfig,
     pub features: FeaturesConfig,
     pub scheduling: SchedulingConfig,
+    pub alerting: AlertingConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RotationConfig {
     pub strategy: String, // "hybrid" | "sticky" | "round-robin" | "random" | "least-used"
     pub cooldown: CooldownConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct CooldownConfig {
     pub default_duration_ms: u64,
     pub max_duration_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ScoringConfig {
     pub health_range: HealthRangeConfig,
     pub penalties: PenaltiesConfig,
@@ -44,7 +45,7 @@ pub struct ScoringConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct HealthRangeConfig {
     pub min: i32,
     pub max: i32,
@@ -52,7 +53,7 @@ pub struct HealthRangeConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PenaltiesConfig {
     pub api_error: i32,
     pub refresh_error: i32,
@@ -61,20 +62,20 @@ pub struct PenaltiesConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RewardsConfig {
     pub success: i32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct WeightsConfig {
     pub health: f64,
     pub lru: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ModelsConfig {
     pub blacklist: Vec<String>,
     pub routing: RoutingConfig,
@@ -82,7 +83,7 @@ pub struct ModelsConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RoutingConfig {
     pub sandbox_keywords: Vec<String>,
     pub cli_keywords: Vec<String>,
@@ -90,34 +91,34 @@ pub struct RoutingConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RetryConfig {
     pub max_attempts: u32,
     pub transient_retry_threshold_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct TokensConfig {
     pub expiry_buffer_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct QuotaConfig {
     pub refresh_interval_ms: u64,
     pub initial_delay_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct EndpointsConfig {
     pub sandbox: Vec<String>,
     pub cli: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct LoggingConfig {
     pub max_buffer_size: usize,
     pub enable_console_capture: bool,
@@ -125,7 +126,7 @@ pub struct LoggingConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct FeaturesConfig {
     pub google_search_grounding: bool,
     pub expose_variants: bool,
@@ -154,11 +155,19 @@ pub struct FeaturesConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SchedulingConfig {
     pub mode: String, // "cache_first" | "balance" | "performance_first"
     pub max_cache_first_wait_seconds: u64,
     pub max_rate_limit_wait_seconds: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AlertingConfig {
+    pub webhook_url: String,
+    pub health_threshold: u32,
+    pub notify_on_full_cooldown: bool,
 }
 
 impl Default for ProxyConfig {
@@ -262,6 +271,11 @@ impl Default for ProxyConfig {
                 max_cache_first_wait_seconds: 5,
                 max_rate_limit_wait_seconds: 300,
             },
+            alerting: AlertingConfig {
+                webhook_url: "".to_string(),
+                health_threshold: 30,
+                notify_on_full_cooldown: true,
+            },
         }
     }
 }
@@ -283,6 +297,7 @@ impl Default for EndpointsConfig { fn default() -> Self { ProxyConfig::default()
 impl Default for LoggingConfig { fn default() -> Self { ProxyConfig::default().logging } }
 impl Default for FeaturesConfig { fn default() -> Self { ProxyConfig::default().features } }
 impl Default for SchedulingConfig { fn default() -> Self { ProxyConfig::default().scheduling } }
+impl Default for AlertingConfig { fn default() -> Self { ProxyConfig::default().alerting } }
 
 static CONFIG: Lazy<RwLock<ProxyConfig>> = Lazy::new(|| RwLock::new(ProxyConfig::default()));
 
