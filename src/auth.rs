@@ -568,19 +568,23 @@ pub fn get_earliest_reset(pool: &str) -> Option<String> {
 }
 
 pub fn parse_duration(val: &str) -> u64 {
-    let re = regex::Regex::new(r"^(\d+)([smh])$").unwrap();
-    if let Some(caps) = re.captures(val) {
-        let amount: u64 = caps.get(1).unwrap().as_str().parse().unwrap_or(60);
-        let unit = caps.get(2).unwrap().as_str();
-        match unit {
-            "s" => amount * 1000,
-            "m" => amount * 60000,
-            "h" => amount * 3600000,
-            _ => 60000,
-        }
-    } else {
-        60000
+    let val = val.trim();
+    if val.is_empty() {
+        return 60000;
     }
+    let unit = &val[val.len() - 1..];
+    let amount_str = &val[0..val.len() - 1];
+    if amount_str.chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(amount) = amount_str.parse::<u64>() {
+            return match unit {
+                "s" => amount * 1000,
+                "m" => amount * 60000,
+                "h" => amount * 3600000,
+                _ => 60000,
+            };
+        }
+    }
+    60000
 }
 
 pub async fn update_account_usage(email: &str, success: bool, model: Option<&str>, pool: Option<&str>, client_id: Option<&str>, status: Option<u16>) {
@@ -1197,7 +1201,7 @@ pub fn generate_fingerprint_for_email(email: Option<&str>) -> DeviceFingerprint 
             plugin_type: "GEMINI".to_string(),
             os_version: Some(os_version),
             arch: Some(arch),
-            sqm_id: Some(uuid::Uuid::new_v4().to_string()),
+            sqm_id: Some(crate::utils::generate_uuid_v4()),
         }),
         created_at: Some(chrono::Utc::now().timestamp_millis() as u64),
     }

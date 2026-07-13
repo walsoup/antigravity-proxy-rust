@@ -115,22 +115,64 @@ async fn add_account_updated(account: AntigravityAccount) {
     crate::auth::add_account(account).await;
 }
 
+fn get_pacific_offset(utc: DateTime<Utc>) -> chrono::FixedOffset {
+    use chrono::{Datelike, TimeZone};
+    let year = utc.year();
+    
+    // DST in US begins on the second Sunday of March.
+    // Start checking from March 8th. The second Sunday will fall between March 8 and March 14.
+    let mut march_second_sunday = 8;
+    while march_second_sunday <= 14 {
+        if let Some(date) = Utc.with_ymd_and_hms(year, 3, march_second_sunday, 12, 0, 0).single() {
+            if date.weekday() == chrono::Weekday::Sun {
+                break;
+            }
+        }
+        march_second_sunday += 1;
+    }
+    
+    // DST in US ends on the first Sunday of November.
+    // Start checking from November 1st. The first Sunday will fall between November 1 and November 7.
+    let mut nov_first_sunday = 1;
+    while nov_first_sunday <= 7 {
+        if let Some(date) = Utc.with_ymd_and_hms(year, 11, nov_first_sunday, 12, 0, 0).single() {
+            if date.weekday() == chrono::Weekday::Sun {
+                break;
+            }
+        }
+        nov_first_sunday += 1;
+    }
+
+    let dst_start = Utc.with_ymd_and_hms(year, 3, march_second_sunday, 10, 0, 0).unwrap(); // 2:00 AM PST = 10:00 AM UTC
+    let dst_end = Utc.with_ymd_and_hms(year, 11, nov_first_sunday, 9, 0, 0).unwrap(); // 2:00 AM PDT = 9:00 AM UTC
+
+    if utc >= dst_start && utc < dst_end {
+        chrono::FixedOffset::west_opt(7 * 3600).unwrap()
+    } else {
+        chrono::FixedOffset::west_opt(8 * 3600).unwrap()
+    }
+}
+
 fn get_next_midnight_pt() -> String {
-    // Current time in Los Angeles
-    let pt_tz = chrono_tz::US::Pacific;
-    let now_pt = Utc::now().with_timezone(&pt_tz);
+    use chrono::TimeZone;
+    let now_utc = Utc::now();
+    let offset = get_pacific_offset(now_utc);
+    let now_pt = now_utc.with_timezone(&offset);
     
     // Set to 00:00:00 of next day
     let tomorrow_pt = (now_pt + chrono::Duration::days(1))
         .date_naive()
         .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_local_timezone(pt_tz)
         .unwrap();
-
-    let utc_dt: DateTime<Utc> = tomorrow_pt.with_timezone(&Utc);
-    utc_dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    
+    // Get the tentative UTC time of tomorrow's midnight PT, then find the correct offset at that time
+    let tentative_utc = offset.from_local_datetime(&tomorrow_pt).unwrap().with_timezone(&Utc);
+    let correct_offset = get_pacific_offset(tentative_utc);
+    let tomorrow_midnight_utc = correct_offset.from_local_datetime(&tomorrow_pt).unwrap().with_timezone(&Utc);
+    
+    tomorrow_midnight_utc.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
+
 
 fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
     let raw_models = data.get("availableModels")

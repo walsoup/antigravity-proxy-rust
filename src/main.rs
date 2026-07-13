@@ -38,7 +38,7 @@ use antigravity_proxy_rust::quota::{fetch_quota, refresh_all_quotas, SUPPORTED_M
 use antigravity_proxy_rust::utils::{
     transform_to_google_body, transform_google_event_to_openai, detect_loop,
     parse_google_error, get_exact_cache, cache_signature,
-    StreamState, hash_string,
+    StreamState, hash_string, generate_uuid_v4, generate_random_hex_8,
 };
 
 static LOG_BUFFER: Lazy<RwLock<Vec<String>>> = Lazy::new(|| RwLock::new(Vec::new()));
@@ -240,8 +240,9 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
     let mut models_array: Vec<String> = models_set.into_iter().collect();
     
     if !get_effective_features().expose_variants {
-        let re = regex::Regex::new(r"-(high|medium|low|extra-low)$").unwrap();
-        models_array.retain(|id| !re.is_match(id));
+        models_array.retain(|id| {
+            !(id.ends_with("-high") || id.ends_with("-medium") || id.ends_with("-low") || id.ends_with("-extra-low"))
+        });
     }
 
     models_array.sort();
@@ -761,7 +762,7 @@ async fn handle_chat_completion_internal(
         hasher.update(seed.as_bytes());
         hex::encode(hasher.finalize())
     } else {
-        uuid::Uuid::new_v4().to_string()
+        generate_uuid_v4()
     };
 
     let mut attempts = 0;
@@ -1074,7 +1075,7 @@ async fn handle_chat_completion_internal(
                     let model_clone = model_name.clone();
                     let session_clone = session_id.clone();
                     let headers_clone = headers.clone();
-                    let req_id_clone = format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string()[0..8]);
+                    let req_id_clone = format!("chatcmpl-{}", generate_random_hex_8());
 
                     let client_id_clone = client_id.clone();
                     tokio::spawn(async move {
@@ -1167,7 +1168,7 @@ async fn handle_chat_completion_internal(
                     }]);
 
                     let mut resp_json = serde_json::json!({
-                        "id": format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string()[0..8]),
+                        "id": format!("chatcmpl-{}", generate_random_hex_8()),
                         "object": "chat.completion",
                         "created": chrono::Utc::now().timestamp(),
                         "model": model_name,

@@ -6,6 +6,29 @@ use once_cell::sync::Lazy;
 use std::hash::{Hash, Hasher};
 use crate::config::{get_proxy_config, get_effective_features};
 
+pub fn generate_uuid_v4() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 16] = rng.r#gen();
+    let b6 = (bytes[6] & 0x0f) | 0x40;
+    let b8 = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        b6, bytes[7],
+        b8, bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+}
+
+pub fn generate_random_hex_8() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let val: u32 = rng.r#gen();
+    format!("{:08x}", val)
+}
+
 // --- Cache Implementation ---
 
 pub struct LruCache<K, V> {
@@ -345,8 +368,12 @@ pub fn parse_google_error(body: &str) -> ParsedGoogleError {
 static TOOL_NAME_REMAP_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn sanitize_function_name(name: &str) -> String {
-    let re_valid = regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
-    if re_valid.is_match(name) {
+    let is_valid = !name.is_empty() && {
+        let mut chars = name.chars();
+        let first = chars.next().unwrap();
+        (first.is_ascii_alphabetic() || first == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    if is_valid {
         return name.to_string();
     }
 
@@ -430,6 +457,43 @@ fn resolve_model_id(model_id: &str) -> String {
     }
 
     clean_id
+}
+
+fn remove_base64_images(text: &str) -> String {
+    let mut result = String::new();
+    let mut current = text;
+    while let Some(start_alt) = current.find("![") {
+        result.push_str(&current[..start_alt]);
+        let search = &current[start_alt..];
+        if let Some(end_alt) = search.find("](") {
+            let url_start = &search[end_alt + 2..];
+            if url_start.starts_with("data:image/") {
+                if let Some(end_url) = url_start.find(')') {
+                    let url_content = &url_start[..end_url];
+                    if url_content.contains(";base64,") {
+                        result.push_str("[Image Removed]");
+                        current = &url_start[end_url + 1..];
+                        continue;
+                    }
+                }
+            }
+        }
+        result.push_str("![");
+        current = &search[2..];
+    }
+    result.push_str(current);
+    result
+}
+
+fn parse_data_url(url: &str) -> Option<(String, String)> {
+    if !url.starts_with("data:") {
+        return None;
+    }
+    let url = &url["data:".len()..];
+    let (metadata, data) = url.split_once(',')?;
+    let mut parts = metadata.split(';');
+    let mime_type = parts.next()?.to_string();
+    Some((mime_type, data.to_string()))
 }
 
 pub fn transform_to_google_body(
@@ -602,21 +666,17 @@ pub fn transform_to_google_body(
                     for part in arr {
                         if part.get("type").and_then(|t| t.as_str()) == Some("text") {
                             if let Some(txt) = part.get("text").and_then(|t| t.as_str()) {
-                                let mut text_content = txt.to_string();
-                                // remove base64 inline markdown images
-                                let re_img = regex::Regex::new(r"!\[.*?\]\(data:image/[^;]+;base64,[a-zA-Z0-9+/=]+\)").unwrap();
-                                text_content = re_img.replace_all(&text_content, "[Image Removed]").to_string();
+                                let text_content = remove_base64_images(txt);
                                 parts.push(serde_json::json!({ "text": text_content }));
                             }
                         } else if part.get("type").and_then(|t| t.as_str()) == Some("image_url") {
                             if let Some(url) = part.get("image_url").and_then(|iu| iu.get("url")).and_then(|u| u.as_str()) {
                                 if url.starts_with("data:") {
-                                    let re_data = regex::Regex::new(r"^data:([^;]+)(?:;[^,]+)*,*(?:base64,)?(.+)$").unwrap();
-                                    if let Some(caps) = re_data.captures(url) {
+                                    if let Some((mime, data)) = parse_data_url(url) {
                                         parts.push(serde_json::json!({
                                             "inlineData": {
-                                                "mimeType": caps.get(1).unwrap().as_str(),
-                                                "data": caps.get(2).unwrap().as_str()
+                                                "mimeType": mime,
+                                                "data": data
                                             }
                                         }));
                                     }
@@ -625,9 +685,7 @@ pub fn transform_to_google_body(
                         }
                     }
                 } else if let Some(txt) = content.as_str() {
-                    let mut text_content = txt.to_string();
-                    let re_img = regex::Regex::new(r"!\[.*?\]\(data:image/[^;]+;base64,[a-zA-Z0-9+/=]+\)").unwrap();
-                    text_content = re_img.replace_all(&text_content, "[Image Removed]").to_string();
+                    let text_content = remove_base64_images(txt);
                     parts.push(serde_json::json!({ "text": text_content }));
                 }
             }
@@ -724,8 +782,20 @@ pub fn transform_to_google_body(
                     "guidelines", "communication_style"
                 ];
                 for tag in tags {
-                    let re = regex::Regex::new(&format!(r"<{}>[\s\S]*?</{}>\n*", tag, tag)).unwrap();
-                    text = re.replace_all(&text, "").to_string();
+                    let start_tag = format!("<{}>", tag);
+                    let end_tag = format!("</{}>", tag);
+                    while let Some(start_idx) = text.find(&start_tag) {
+                        if let Some(end_idx) = text[start_idx..].find(&end_tag) {
+                            let end_pos = start_idx + end_idx + end_tag.len();
+                            let mut tail_idx = end_pos;
+                            while tail_idx < text.len() && text.as_bytes()[tail_idx] == b'\n' {
+                                tail_idx += 1;
+                            }
+                            text.replace_range(start_idx..tail_idx, "");
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -914,6 +984,7 @@ pub fn transform_to_google_body(
         }
     }
 
+    let fallback_session = generate_uuid_v4();
     let mut google_request = serde_json::json!({
         "contents": final_contents,
         "generationConfig": generation_config,
@@ -923,7 +994,7 @@ pub fn transform_to_google_body(
             { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": safety_threshold },
             { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": safety_threshold }
         ],
-        "sessionId": session_id.unwrap_or(&uuid::Uuid::new_v4().to_string()).to_string()
+        "sessionId": session_id.unwrap_or(&fallback_session).to_string()
     });
 
     if let Some(sys) = system_instruction {
@@ -1073,7 +1144,7 @@ pub fn transform_to_google_body(
         "project": project_id,
         "model": google_model,
         "userAgent": "antigravity",
-        "requestId": format!("agent-{}", uuid::Uuid::new_v4()),
+        "requestId": format!("agent-{}", generate_uuid_v4()),
         "requestType": "agent",
         "request": google_request
     })
@@ -1126,7 +1197,7 @@ pub fn transform_google_event_to_openai(
 ) -> Option<OpenAICompletionChunk> {
     let response = google_event.get("response").unwrap_or(google_event);
     let request_id_actual = if request_id.is_empty() {
-        format!("chatcmpl-{}", uuid::Uuid::new_v4().to_string().get(0..8).unwrap())
+        format!("chatcmpl-{}", generate_random_hex_8())
     } else {
         request_id.to_string()
     };
@@ -1188,8 +1259,19 @@ pub fn transform_google_event_to_openai(
             if let Some(txt) = part.get("text").and_then(|v| v.as_str()) {
                 let mut clean_text = txt.to_string();
                 if clean_text.contains("thoughtSignature:") {
-                    let re_sig = regex::Regex::new(r"thoughtSignature:[a-zA-Z0-9\-_]+").unwrap();
-                    clean_text = re_sig.replace_all(&clean_text, "").to_string();
+                    while let Some(start_idx) = clean_text.find("thoughtSignature:") {
+                        let mut end_idx = start_idx + "thoughtSignature:".len();
+                        let bytes = clean_text.as_bytes();
+                        while end_idx < bytes.len() {
+                            let c = bytes[end_idx];
+                            if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' {
+                                end_idx += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        clean_text.replace_range(start_idx..end_idx, "");
+                    }
                     clean_text = clean_text.trim().to_string();
                 }
 
@@ -1237,10 +1319,9 @@ pub fn transform_google_event_to_openai(
                     .unwrap_or("");
 
                 let mut call_id = if raw_id.is_empty() {
-                    format!("call_{}", &uuid::Uuid::new_v4().to_string()[0..8])
+                    format!("call_{}", generate_random_hex_8())
                 } else {
-                    let re_clean = regex::Regex::new(r"[^a-zA-Z0-9_-]").unwrap();
-                    re_clean.replace_all(raw_id, "_").to_string()
+                    raw_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect::<String>()
                 };
 
                 if call_id.len() > 64 {
