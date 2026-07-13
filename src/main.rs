@@ -1296,7 +1296,8 @@ fn pipe_stream_events(
                                     let mut cleaned = accumulated_content.clone();
                                     // simple suffix deduplication
                                     if cleaned.len() > 200 {
-                                        cleaned = cleaned[..cleaned.len() - 100].to_string();
+                                        let split_idx = cleaned.floor_char_boundary(cleaned.len() - 100);
+                                        cleaned = cleaned[..split_idx].to_string();
                                     }
                                     format!("Here is your output so far:\n<thinking>\n{}\n</thinking>\n{}\nYou got stuck in a repetitive loop. Please continue from here without repeating yourself.", accumulated_thought, cleaned)
                                 } else {
@@ -1431,7 +1432,8 @@ fn pipe_stream_events(
                                 recent_content_buffer.push_str(c);
 
                                 if recent_content_buffer.len() > 2000 {
-                                    recent_content_buffer = recent_content_buffer[recent_content_buffer.len() - 2000..].to_string();
+                                    let split_idx = recent_content_buffer.floor_char_boundary(recent_content_buffer.len() - 2000);
+                                    recent_content_buffer = recent_content_buffer[split_idx..].to_string();
                                 }
 
                                 if detect_loop(&recent_content_buffer) {

@@ -219,11 +219,12 @@ fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
                         reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
                     }
                 } else if let Some(s) = rt.as_str() {
-                    if s.ends_with('s') && s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                        let sec_str = &s[0..s.len() - 1];
-                        if let Ok(sec) = sec_str.parse::<i64>() {
-                            if let Some(dt) = DateTime::from_timestamp_millis(Utc::now().timestamp_millis() + sec * 1000) {
-                                reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                    if let Some(sec_str) = s.strip_suffix('s') {
+                        if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                            if let Ok(sec) = sec_str.parse::<i64>() {
+                                if let Some(dt) = DateTime::from_timestamp_millis(Utc::now().timestamp_millis() + sec * 1000) {
+                                    reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                                }
                             }
                         }
                     } else {
