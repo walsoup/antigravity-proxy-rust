@@ -88,13 +88,27 @@ macro_rules! log_err {
 // Global variable to keep track of the last used model family for credits endpoint
 static GLOBAL_LAST_USED_MODEL_FAMILY: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
 
+async fn no_cache_middleware(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store, no-cache, must-revalidate, max-age=0"),
+    );
+    headers.insert(
+        header::PRAGMA,
+        header::HeaderValue::from_static("no-cache"),
+    );
+    response
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
     let config_path = "config.json";
     load_proxy_config(config_path);
     
-    let _ = antigravity_proxy_rust::auth::load_accounts_config();
+    let _ = antigravity_proxy_rust::auth::load_accounts_config().await;
     
     // Create broadcast channel for events
     let (tx, _) = broadcast::channel(100);
@@ -144,7 +158,10 @@ async fn main() {
         .route("/api/accounts/:email/project", post(api_set_project_handler))
         .route("/api/accounts/:email/cooldown", post(api_set_cooldown_handler))
         // Serve frontend files
-        .nest_service("/frontend", ServeDir::new("src/frontend"))
+        .nest(
+            "/frontend",
+            Router::new().nest_service("/", ServeDir::new("src/frontend")).layer(axum::middleware::from_fn(no_cache_middleware)),
+        )
         .route("/", get(|| async { axum::response::Redirect::to("/frontend/index.html") }))
         .layer(cors);
 
@@ -156,42 +173,48 @@ async fn main() {
 }
 
 // Authentication Check Helper
-fn check_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Result<(), (StatusCode, Value)> {
-    let proxy_config = get_proxy_config();
-    let required_password = std::env::var("PROXY_PASSWORD")
-        .ok()
-        .or_else(|| {
-            // Check if there is security password inside config.json (handled as value)
-            let val = serde_json::to_value(&proxy_config).ok()?;
-            val.get("security")?.get("password")?.as_str().map(|s| s.to_string())
-        });
-    
-    if let Some(pwd) = required_password {
-        let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
-        let mut token = auth_header.and_then(|h| {
-            if h.starts_with("Bearer ") {
-                Some(h[7..].to_string())
-            } else {
-                Some(h.to_string())
-            }
-        });
-
-        if token.is_none() {
-            token = headers.get("X-Proxy-Password").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+async fn check_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Result<String, (StatusCode, Value)> {
+    let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
+    let mut token = auth_header.and_then(|h| {
+        if h.starts_with("Bearer ") {
+            Some(h[7..].to_string())
+        } else {
+            Some(h.to_string())
         }
+    });
 
-        if token.is_none() {
-            token = query.get("token").cloned();
-        }
+    if token.is_none() {
+        token = headers.get("X-Proxy-Password").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+    }
 
-        if token != Some(pwd) {
+    if token.is_none() {
+        token = query.get("token").cloned();
+    }
+
+    let token = match token {
+        Some(t) => t,
+        None => {
             return Err((
                 StatusCode::UNAUTHORIZED,
-                serde_json::json!({ "error": "Unauthorized: Invalid or missing access passcode" }),
+                serde_json::json!({ "error": "Unauthorized: Missing API key" }),
             ));
         }
+    };
+
+    if let Ok(pwd) = std::env::var("PROXY_PASSWORD") {
+        if token == pwd {
+            return Ok("admin".to_string());
+        }
     }
-    Ok(())
+
+    Err((
+        StatusCode::UNAUTHORIZED,
+        serde_json::json!({ "error": "Unauthorized: Invalid API key" }),
+    ))
+}
+
+async fn check_admin_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Result<(), (StatusCode, Value)> {
+    check_auth(headers, query).await.map(|_| ())
 }
 
 // --- Route Handlers ---
@@ -201,7 +224,7 @@ async fn health_handler() -> impl IntoResponse {
 }
 
 async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
 
@@ -363,7 +386,7 @@ async fn api_sse_handler(
     headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
 
@@ -408,7 +431,7 @@ async fn api_sse_handler(
 }
 
 async fn api_status_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
 
@@ -428,7 +451,7 @@ async fn api_strategy_handler(
     Query(query): Query<HashMap<String, String>>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
 
@@ -443,7 +466,7 @@ async fn api_strategy_handler(
 }
 
 async fn api_config_get_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     Json(get_proxy_config()).into_response()
@@ -454,7 +477,7 @@ async fn api_config_post_handler(
     Query(query): Query<HashMap<String, String>>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
 
@@ -465,7 +488,7 @@ async fn api_config_post_handler(
 }
 
 async fn api_clear_capabilities_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     antigravity_proxy_rust::auth::clear_all_capabilities();
@@ -473,7 +496,7 @@ async fn api_clear_capabilities_handler(headers: HeaderMap, Query(query): Query<
 }
 
 async fn api_reset_all_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     
@@ -493,7 +516,7 @@ async fn api_reset_all_handler(headers: HeaderMap, Query(query): Query<HashMap<S
 }
 
 async fn api_purge_state_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     purge_system_state();
@@ -505,7 +528,7 @@ async fn api_delete_account_handler(
     Query(query): Query<HashMap<String, String>>,
     Path(email): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     remove_account(&email).await;
@@ -517,7 +540,7 @@ async fn api_reset_account_handler(
     Query(query): Query<HashMap<String, String>>,
     Path(email): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     reset_account(&email);
@@ -529,7 +552,7 @@ async fn api_rediscover_project_handler(
     Query(query): Query<HashMap<String, String>>,
     Path(email): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     let accounts = get_accounts();
@@ -556,7 +579,7 @@ async fn api_set_project_handler(
     Path(email): Path<String>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     if let Some(pid) = body.get("projectId").and_then(|v| v.as_str()) {
@@ -572,7 +595,7 @@ async fn api_set_cooldown_handler(
     Path(email): Path<String>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
     let pool = body.get("pool").and_then(|v| v.as_str()).unwrap_or("cli");
@@ -588,11 +611,14 @@ async fn chat_completions_handler(
     Query(query): Query<HashMap<String, String>>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    if let Err(e) = check_auth(&headers, &query) {
-        return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
-    }
+    let user_email = match check_auth(&headers, &query).await {
+        Ok(email) => email,
+        Err(e) => {
+            return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
+        }
+    };
 
-    match handle_chat_completion_internal(headers, query, body).await {
+    match handle_chat_completion_internal(headers, query, body, Some(user_email)).await {
         Ok(res) => res,
         Err((status, msg)) => Response::builder()
             .status(status)
@@ -609,6 +635,7 @@ async fn handle_chat_completion_internal(
     headers: HeaderMap,
     _query: HashMap<String, String>,
     mut openai_body: Value,
+    authenticated_user_email: Option<String>,
 ) -> Result<Response, (StatusCode, String)> {
     let mut model_name = openai_body.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if model_name.is_empty() {
@@ -743,7 +770,9 @@ async fn handle_chat_completion_internal(
         (model_lower.contains("gemini-3") && !model_lower.contains("gemini-3.1") && !model_lower.contains("flash"))
     );
 
-    let client_id = headers.get("x-client-id").and_then(|h| h.to_str().ok()).unwrap_or("unknown").to_string();
+    let client_id = authenticated_user_email.clone().unwrap_or_else(|| {
+        headers.get("x-client-id").and_then(|h| h.to_str().ok()).unwrap_or("unknown").to_string()
+    });
     let first_msg = openai_body.get("messages")
         .and_then(|m| m.get(0))
         .and_then(|m| m.get("content"))
@@ -871,6 +900,20 @@ async fn handle_chat_completion_internal(
     }
 
     let available_accounts = get_accounts().len();
+    if available_accounts == 0 {
+        return Ok(Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "error": {
+                    "message": "No Google Cloud provider accounts configured in the proxy pool. Please add a Google Cloud account via the Admin Console to route upstream API calls.",
+                    "type": "service_unavailable",
+                    "code": 503
+                }
+            }).to_string()))
+            .unwrap()
+            .into_response());
+    }
     let max_attempts = std::cmp::max(config.retry.max_attempts as usize, available_accounts);
     let mut tried_emails = Vec::new();
     let mut systemic_error_count = 0;
@@ -885,16 +928,16 @@ async fn handle_chat_completion_internal(
             let delay_ms = std::cmp::min(500 * attempts, 3000);
             tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
 
-            if !is_sandbox_only && last_status != 503 {
+            if (!is_claude && !is_gpt) && last_status != 503 {
                 use_cli_pool = !use_cli_pool;
                 log_info!("[Switch] Pool switch threshold met. Trying pool: {} (attempt {})", if use_cli_pool { "cli" } else { "sandbox" }, attempts);
             } else {
-                log_info!("[Switch] Skipping pool switch for sandbox-only model (attempt {})", attempts);
+                log_info!("[Switch] Skipping pool switch for non-fallback model (attempt {})", attempts);
             }
         }
 
         let mut account = get_best_account(Some(if use_cli_pool { "cli" } else { "sandbox" }), Some(&model_name), Some(&client_id), &tried_emails, true).await;
-        if account.is_none() && !is_sandbox_only {
+        if account.is_none() && (!is_claude && !is_gpt) {
             log_info!("[Manager] No READY accounts in {} pool, trying the other pool first...", if use_cli_pool { "CLI" } else { "Sandbox" });
             let other_pool = if use_cli_pool { "sandbox" } else { "cli" };
             account = get_best_account(Some(other_pool), Some(&model_name), Some(&client_id), &tried_emails, true).await;
@@ -947,7 +990,7 @@ async fn handle_chat_completion_internal(
         let req_headers = if use_cli_pool && !target_model.contains("claude") {
             get_gemini_cli_headers_builder(acc.access_token.as_deref().unwrap_or(""), &fp)
         } else {
-            get_impersonation_headers_builder(acc.access_token.as_deref().unwrap_or(""), &fp, Some(&target_model))
+            get_impersonation_headers_builder(acc.access_token.as_deref().unwrap_or(""), &fp, Some(&target_model), acc.project_id.as_deref())
         };
 
         if !config.logging.disable_request_logging && !config_features.fast_mode {
@@ -967,8 +1010,7 @@ async fn handle_chat_completion_internal(
             tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
-        let client = reqwest::Client::new();
-        let client_res = client.post(&google_url)
+        let client_res = antigravity_proxy_rust::utils::HTTP_CLIENT.post(&google_url)
             .headers(req_headers)
             .json(&google_body)
             .timeout(Duration::from_millis(timeout_ms))
@@ -1232,7 +1274,7 @@ fn pipe_stream_events(
     headers: HeaderMap,
     _email: String,
     _use_cli_pool: bool,
-    _client_id: String,
+    client_id: String,
     internal_retry_count: u32,
 ) -> BoxFuture<'static, Result<(), String>> {
     async move {
@@ -1321,7 +1363,7 @@ fn pipe_stream_events(
                                 }
 
                                 // Recursively execute internal completion with retry count incremented
-                                let inner_res = handle_chat_completion_internal(client_headers, HashMap::new(), retry_body).await;
+                                let inner_res = handle_chat_completion_internal(client_headers, HashMap::new(), retry_body, Some(client_id.clone())).await;
                                 match inner_res {
                                     Ok(_response) => {
                                         // Pipe new stream directly into tx
@@ -1500,7 +1542,7 @@ fn pipe_stream_events(
 // Function to perform a mock internal completion by calling handle_chat_completion_internal directly
 fn run_internal_completion(headers: HeaderMap, payload: Value) -> BoxFuture<'static, Result<Value, String>> {
     async move {
-        let res = handle_chat_completion_internal(headers, HashMap::new(), payload).await
+        let res = handle_chat_completion_internal(headers, HashMap::new(), payload, None).await
             .map_err(|e| e.1)?;
         
         // Convert Response to Json

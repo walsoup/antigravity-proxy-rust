@@ -8,7 +8,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use sha2::{Sha256, Digest};
 use base64::prelude::*;
-use crate::config::{get_proxy_config, get_effective_features};
+use crate::config::get_proxy_config;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DeviceFingerprint {
@@ -99,6 +99,10 @@ pub struct AntigravityAccount {
     pub project_id: Option<String>,
     #[serde(rename = "managedProjectId")]
     pub managed_project_id: Option<String>,
+    pub pool: Option<String>,
+    pub status: Option<String>,
+    #[serde(rename = "userId")]
+    pub user_id: Option<String>,
 
     #[serde(rename = "healthScore")]
     pub health_score: i32,
@@ -197,31 +201,31 @@ fn get_accounts_file() -> String {
         })
 }
 
-pub fn load_accounts_config() -> Result<(), String> {
-    let file_path = get_accounts_file();
-    let path = Path::new(&file_path);
-    
+pub async fn load_accounts_config() -> Result<(), String> {
     let mut state = AUTH_STATE.write().unwrap();
+    state.strategy = "hybrid".to_string(); // Always default to hybrid or load from config
     
-    if path.exists() {
-        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        // Try storage format first
-        if let Ok(storage) = serde_json::from_str::<StorageFormat>(&content) {
-            state.accounts = storage.accounts;
-            state.strategy = storage.strategy.unwrap_or_else(|| "hybrid".to_string());
-        } else if let Ok(accounts) = serde_json::from_str::<Vec<AntigravityAccount>>(&content) {
-            // Old format
-            state.accounts = accounts;
-            state.strategy = "hybrid".to_string();
-        } else {
-            return Err("Failed to parse accounts JSON".to_string());
+    let path = get_accounts_file();
+    if std::path::Path::new(&path).exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                match serde_json::from_str::<Vec<AntigravityAccount>>(&content) {
+                    Ok(accounts) => {
+                        state.accounts = accounts;
+                        println!("[Manager] Loaded {} accounts from local storage.", state.accounts.length_or_count());
+                    }
+                    Err(e) => {
+                        eprintln!("[Manager] Failed to parse {}: {}", path, e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[Manager] Failed to read {}: {}", path, e);
+            }
         }
     } else {
-        state.accounts = Vec::new();
-        state.strategy = "hybrid".to_string();
+        println!("[Manager] Accounts file {} does not exist, starting empty.", path);
     }
-    
-    println!("[Manager] Loaded {} accounts from storage.", state.accounts.length_or_count());
     Ok(())
 }
 
@@ -233,15 +237,21 @@ impl<T> LengthOrCount for Vec<T> {
 }
 
 pub fn save_accounts_config() -> Result<(), String> {
-    let file_path = get_accounts_file();
     let state = AUTH_STATE.read().unwrap();
-    let storage = StorageFormat {
-        accounts: state.accounts.clone(),
-        strategy: Some(state.strategy.clone()),
-    };
-    let content = serde_json::to_string_pretty(&storage).map_err(|e| e.to_string())?;
-    fs::write(file_path, content).map_err(|e| e.to_string())?;
+    let accounts_to_sync = state.accounts.clone();
     
+    let path = get_accounts_file();
+    match serde_json::to_string_pretty(&accounts_to_sync) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                eprintln!("[Manager] Failed to write accounts file: {}", e);
+            }
+        }
+        Err(e) => {
+            eprintln!("[Manager] Failed to serialize accounts: {}", e);
+        }
+    }
+
     // Emit update event
     emit_event(ManagerEvent::Update {
         accounts: state.accounts.clone(),
@@ -354,7 +364,7 @@ pub fn flag_account_challenge(email: &str, pool: &str, model_family: &str, chall
         cooldowns.insert(format!("{}|{}", pool, model_family), expiry);
         acc.cooldowns = Some(cooldowns);
 
-        let mut challenge_entry = ChallengeEntry {
+        let challenge_entry = ChallengeEntry {
             challenge_type: challenge.get("type").and_then(|v| v.as_str()).unwrap_or("CAPTCHA").to_string(),
             url: challenge.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             detected_at: now,
@@ -440,11 +450,12 @@ pub async fn add_account(account: AntigravityAccount) {
     {
         let mut state = AUTH_STATE.write().unwrap();
         if let Some(existing) = state.accounts.iter_mut().find(|a| a.email == account.email) {
-            *existing = account;
+            *existing = account.clone();
         } else {
-            state.accounts.push(account);
+            state.accounts.push(account.clone());
         }
     }
+    
     let _ = save_accounts_config();
 }
 
@@ -538,7 +549,7 @@ fn get_pid_offset() -> usize {
     pid % count
 }
 
-pub fn get_earliest_reset(pool: &str) -> Option<String> {
+pub fn get_earliest_reset(_pool: &str) -> Option<String> {
     let accounts = get_accounts();
     let usable: Vec<&AntigravityAccount> = accounts.iter().filter(|a| a.quota.is_some()).collect();
     if usable.is_empty() {
@@ -682,6 +693,15 @@ pub async fn get_best_account(
     let usable: Vec<AntigravityAccount> = accounts.into_iter().filter(|a| {
         !a.refresh_token.is_empty() && a.challenge.is_none() && !exclude_emails.contains(&a.email)
     }).collect();
+
+    // If client_id is an email address, prioritize matching that account directly
+    if let Some(cid) = client_id {
+        if cid.contains('@') {
+            if let Some(matched) = usable.iter().find(|a| a.email == cid) {
+                return ensure_account_ready(matched.clone()).await;
+            }
+        }
+    }
 
     if let Some(p) = pool {
         let family = model.map(get_family_name).unwrap_or_else(|| "Other".to_string());
@@ -1012,8 +1032,34 @@ pub fn generate_auth_url(verifier: &str, dynamic_redirect_uri: Option<&str>) -> 
     format!("{}?{}", OAUTH_SETTINGS.auth_uri, query)
 }
 
+pub async fn exchange_gcloud_code(code: &str) -> Result<GoogleTokenResponse, String> {
+    let client = &crate::utils::HTTP_CLIENT;
+    let params = vec![
+        ("client_id", "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"),
+        ("client_secret", "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"),
+        ("code", code),
+        ("redirect_uri", "http://localhost:13337"),
+        ("grant_type", "authorization_code"),
+    ];
+
+    let res = client
+        .post(OAUTH_SETTINGS.token_uri)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Token request failed: {}", e))?;
+
+    if res.status().is_success() {
+        let tokens: GoogleTokenResponse = res.json().await.map_err(|e| format!("Failed to parse token response: {}", e))?;
+        Ok(tokens)
+    } else {
+        let err_text = res.text().await.unwrap_or_default();
+        Err(format!("Token exchange failed: {}", err_text))
+    }
+}
+
 pub async fn exchange_code(code: &str, verifier: &str, dynamic_redirect_uri: Option<&str>) -> Result<GoogleTokenResponse, String> {
-    let client = reqwest::Client::new();
+    let client = &crate::utils::HTTP_CLIENT;
     let redirect = dynamic_redirect_uri.unwrap_or(OAUTH_SETTINGS.redirect_uri);
 
     let params = [
@@ -1041,7 +1087,7 @@ pub async fn exchange_code(code: &str, verifier: &str, dynamic_redirect_uri: Opt
 }
 
 pub async fn refresh_access_token(refresh_token: &str) -> Result<GoogleTokenResponse, String> {
-    let client = reqwest::Client::new();
+    let client = &crate::utils::HTTP_CLIENT;
     let params = [
         ("client_id", OAUTH_SETTINGS.client_id.as_str()),
         ("client_secret", OAUTH_SETTINGS.client_secret.as_str()),
@@ -1065,12 +1111,12 @@ pub async fn refresh_access_token(refresh_token: &str) -> Result<GoogleTokenResp
 }
 
 pub async fn get_project_id(access_token: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = &crate::utils::HTTP_CLIENT;
     let ide_types = vec!["VSCODE", "JETBRAINS", "CLOUD_SHELL", "IDE_UNSPECIFIED"];
 
     for ide_type in ide_types {
         let fp = generate_fingerprint_for_email(None);
-        let headers = get_impersonation_headers_builder(access_token, &fp, None);
+        let headers = get_impersonation_headers_builder(access_token, &fp, None, None);
         
         let payload = serde_json::json!({
             "metadata": {
@@ -1117,7 +1163,7 @@ pub async fn get_project_id(access_token: &str) -> Result<String, String> {
 }
 
 pub async fn get_user_email(access_token: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = &crate::utils::HTTP_CLIENT;
     let res = client
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
         .bearer_auth(access_token)
@@ -1137,7 +1183,7 @@ pub async fn get_user_email(access_token: &str) -> Result<String, String> {
 // Fingerprint generation matching TS version
 pub fn generate_fingerprint_for_email(email: Option<&str>) -> DeviceFingerprint {
     let platforms = vec!["darwin/x64", "darwin/arm64"];
-    let archs = vec!["x64", "arm64"];
+    let _archs = vec!["x64", "arm64"];
     let sdk_clients = vec![
         "google-cloud-sdk vscode/1.96.0",
         "google-cloud-sdk vscode/1.95.0",
@@ -1212,6 +1258,7 @@ pub fn get_impersonation_headers_builder(
     access_token: &str,
     fingerprint: &DeviceFingerprint,
     model: Option<&str>,
+    project_id: Option<&str>,
 ) -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
     
@@ -1219,6 +1266,14 @@ pub fn get_impersonation_headers_builder(
         reqwest::header::AUTHORIZATION,
         reqwest::header::HeaderValue::from_str(&format!("Bearer {}", access_token)).unwrap(),
     );
+    
+    if let Some(pid) = project_id {
+        if !pid.is_empty() {
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(pid) {
+                headers.insert(reqwest::header::HeaderName::from_static("x-goog-user-project"), val);
+            }
+        }
+    }
     headers.insert(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),

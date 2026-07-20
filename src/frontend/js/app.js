@@ -3,8 +3,9 @@
  * Handles authentication, SSE real-time state, and UI logic.
  */
 
+const urlParams = new URLSearchParams(window.location.search);
 const state = {
-    passcode: localStorage.getItem('ag_passcode') || '',
+    passcode: urlParams.get('token') || localStorage.getItem('ag_passcode') || '',
     isConnected: false,
     config: {},
     families: {},
@@ -65,6 +66,7 @@ async function checkPasscode(silent = false) {
             
             connectSSE();
             loadPlaygroundModels();
+            switchTab('dashboard');
         } else if (res.status === 401) {
             throw new Error('Invalid passcode');
         } else {
@@ -86,6 +88,7 @@ async function checkPasscode(silent = false) {
                 document.getElementById('app').classList.remove('hidden');
                 connectSSE();
                 loadPlaygroundModels();
+                switchTab('dashboard');
             }
         }
     }
@@ -126,9 +129,9 @@ function switchTab(tabId) {
     document.getElementById('page-title').textContent = titles[tabId] || 'Dashboard';
 
     // Reset scroll position
-    const mainContent = document.querySelector('.main-content');
-    if (mainContent) {
-        mainContent.scrollTop = 0;
+    const activeView = document.getElementById(`view-${tabId}`);
+    if (activeView) {
+        activeView.scrollTop = 0;
     }
 
     if (tabId === 'settings') {
@@ -139,10 +142,10 @@ function switchTab(tabId) {
 function addLog(msg, level = 'info') {
     const logContent = document.getElementById('log-content');
     const entry = document.createElement('div');
-    entry.className = `log-entry ${level}`;
+    entry.className = `py-0.5 px-2 text-[11px] font-mono break-all ${level === 'error' ? 'text-red-400' : level === 'warn' || level === 'warning' ? 'text-amber-400' : 'text-slate-300'}`;
     
     const time = new Date().toLocaleTimeString([], { hour12: false });
-    entry.innerHTML = `<span class="text-secondary">[${time}]</span> ${msg}`;
+    entry.innerHTML = `<span class="text-on-surface-variant/60">[${time}]</span> ${msg}`;
     
     logContent.appendChild(entry);
     
@@ -166,7 +169,13 @@ function showToast(msg, level = 'info') {
     if (!container) return;
 
     const toast = document.createElement('div');
-    toast.className = `toast ${level}`;
+    toast.className = `p-4 rounded-xl shadow-2xl flex items-center gap-3 backdrop-blur-md transition-all duration-300 pointer-events-auto border transform translate-x-4 opacity-0 ${
+        level === 'error' 
+            ? 'bg-red-950/90 text-red-200 border-red-500/30' 
+            : level === 'warning' || level === 'warn'
+                ? 'bg-amber-950/90 text-amber-200 border-amber-500/30'
+                : 'bg-slate-900/90 text-slate-100 border-slate-700/50'
+    }`;
     
     // Convert level icon
     let icon = 'ℹ️';
@@ -174,23 +183,27 @@ function showToast(msg, level = 'info') {
     if (level === 'warning' || level === 'warn') icon = '⚠️';
     if (msg.includes('successfully') || msg.includes('copied')) icon = '✅';
 
-    toast.innerHTML = `<span class="toast-icon">${icon}</span><span class="toast-message">${msg}</span>`;
+    toast.innerHTML = `<span>${icon}</span><span class="text-sm font-medium">${msg}</span>`;
     container.appendChild(toast);
 
     // Fade in
-    setTimeout(() => toast.classList.add('visible'), 10);
+    setTimeout(() => {
+        toast.classList.remove('translate-x-4', 'opacity-0');
+        toast.classList.add('translate-x-0', 'opacity-100');
+    }, 10);
 
     // Fade out and remove
     setTimeout(() => {
-        toast.classList.remove('visible');
-        setTimeout(() => toast.remove(), 400);
+        toast.classList.remove('translate-x-0', 'opacity-100');
+        toast.classList.add('translate-x-4', 'opacity-0');
+        setTimeout(() => toast.remove(), 300);
     }, 4000);
 }
 
 function togglePlaygroundSidebar() {
     const sidebar = document.querySelector('.playground-sidebar');
     if (sidebar) {
-        sidebar.classList.toggle('active');
+        sidebar.classList.toggle('sidebar-open');
     }
 }
 
@@ -492,26 +505,26 @@ function renderDashboard() {
         }
 
         const card = document.createElement('div');
-        card.className = 'glass-card family-card';
+        card.className = 'card-surface p-5 rounded-2xl flex flex-col gap-3 border border-outline-variant/30 shadow-lg';
         card.innerHTML = `
-            <div class="family-header">
-                <div class="family-name">${name}</div>
-                <div class="health-badge ${healthClass}">${data.health.toFixed(1)}% Health</div>
+            <div class="flex justify-between items-center">
+                <div class="font-bold text-on-surface text-base">${name}</div>
+                <div class="px-2.5 py-1 rounded-full text-[10px] font-bold ${healthClass === 'good' ? 'bg-secondary/10 text-secondary' : healthClass === 'warn' ? 'bg-amber-500/10 text-amber-500' : 'bg-red-500/10 text-red-500'}">${data.health.toFixed(1)}% Health</div>
             </div>
-            <div class="metric-row">
-                <span class="text-secondary">Available Nodes</span>
-                <span class="metric-value">${data.available} / ${data.total}</span>
+            <div class="flex justify-between text-xs">
+                <span class="text-on-surface-variant">Available Nodes</span>
+                <span class="font-semibold text-on-surface">${data.available} / ${data.total}</span>
             </div>
-            <div class="metric-row">
-                <span class="text-secondary">Current Queue</span>
-                <span class="metric-value">${data.queueSize} reqs</span>
+            <div class="flex justify-between text-xs">
+                <span class="text-on-surface-variant">Current Queue</span>
+                <span class="font-semibold text-on-surface">${data.queueSize} reqs</span>
             </div>
-            <div class="metric-row">
-                <span class="text-secondary">Next Refresh</span>
-                <span class="metric-value" style="color: var(--accent-primary)">${refreshText}</span>
+            <div class="flex justify-between text-xs">
+                <span class="text-on-surface-variant">Next Refresh</span>
+                <span class="font-semibold text-primary-fixed-dim">${refreshText}</span>
             </div>
-            <div class="progress-bar-bg">
-                <div class="progress-bar-fill" style="width: ${data.health}%; background: var(--status-${healthClass === 'good' ? 'healthy' : healthClass === 'warn' ? 'degraded' : 'dead'})"></div>
+            <div class="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden mt-1">
+                <div class="h-full rounded-full transition-all duration-500" style="width: ${data.health}%; background: ${healthClass === 'good' ? '#10b981' : healthClass === 'warn' ? '#f59e0b' : '#ef4444'}"></div>
             </div>
         `;
         grid.appendChild(card);
@@ -526,14 +539,14 @@ function renderDashboard() {
         const isCooldown = acc.cooldowns && Object.keys(acc.cooldowns).length > 0;
         const isChallenge = acc.challenge && acc.challenge.url;
         let healthStatus = 'Healthy';
-        let healthClass = 'var(--status-healthy)';
+        let healthClass = '#38e5a6';
         if (isCooldown) {
             healthStatus = 'Cooling Down';
-            healthClass = 'var(--status-degraded)';
+            healthClass = '#f59e0b';
         }
         if (isChallenge) {
             healthStatus = 'Verification Needed';
-            healthClass = 'var(--status-dead)';
+            healthClass = '#ffb4ab';
         }
         
         const lastUsed = acc.lastUsed ? new Date(acc.lastUsed).toLocaleTimeString() : 'Never';
@@ -542,7 +555,7 @@ function renderDashboard() {
         
         // Main Row
         const trMain = document.createElement('tr');
-        trMain.className = 'cursor-pointer';
+        trMain.className = 'hover:bg-surface-container-low/40 transition-colors cursor-pointer border-b border-outline-variant/10';
         trMain.setAttribute('tabindex', '0');
         trMain.setAttribute('role', 'button');
         trMain.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
@@ -555,23 +568,23 @@ function renderDashboard() {
             }
         };
         trMain.innerHTML = `
-            <td class="font-mono text-sm">
-                <div class="flex-align-center gap-2">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="transition-transform duration-200" style="transform: ${isExpanded ? 'rotate(90deg)' : 'none'}; color: var(--text-secondary)"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            <td class="p-4 font-mono text-sm text-on-surface">
+                <div class="flex items-center gap-2">
+                    <span class="material-symbols-outlined text-[18px] transition-transform duration-200 text-on-surface-variant" style="transform: ${isExpanded ? 'rotate(90deg)' : 'none'}">chevron_right</span>
                     <span>${acc.email}</span>
                 </div>
             </td>
-            <td>${(acc.type || 'Standard').toUpperCase()}</td>
-            <td>
-                <div class="flex-align-center gap-2">
-                    <div class="status-dot" style="background: ${healthClass}; box-shadow: 0 0 8px ${healthClass}"></div>
-                    ${healthStatus}
+            <td class="p-4 text-xs text-on-surface-variant font-mono">${(acc.type || 'Standard').toUpperCase()}</td>
+            <td class="p-4 text-sm">
+                <div class="flex items-center gap-2">
+                    <div class="w-2.5 h-2.5 rounded-full" style="background: ${healthClass}; box-shadow: 0 0 8px ${healthClass}"></div>
+                    <span class="text-on-surface text-xs font-semibold">${healthStatus}</span>
                 </div>
             </td>
-            <td class="text-secondary text-sm">${lastUsed}</td>
-            <td>
-                <div class="flex-align-center gap-2" onclick="event.stopPropagation()">
-                    <button class="action-btn danger sm" onclick="resetAccount('${acc.email}')">Reset</button>
+            <td class="p-4 text-xs text-on-surface-variant">${lastUsed}</td>
+            <td class="p-4 text-right">
+                <div class="flex justify-end gap-2" onclick="event.stopPropagation()">
+                    <button class="bg-error-container/20 text-error hover:bg-error-container/40 text-xs px-3 py-1.5 rounded-xl border border-error/20 transition-colors active:scale-95 font-semibold" onclick="resetAccount('${acc.email}')">Reset</button>
                 </div>
             </td>
         `;
@@ -579,39 +592,39 @@ function renderDashboard() {
 
         // Details Row
         const trDetails = document.createElement('tr');
-        trDetails.className = `details-row ${isExpanded ? '' : 'hidden'}`;
+        trDetails.className = `border-b border-outline-variant/10 bg-slate-950/40 ${isExpanded ? '' : 'hidden'}`;
         
         const details = organizeAccountDetails(acc);
         let allocationCardsHtml = '';
         if (details.length === 0) {
-            allocationCardsHtml = '<div class="text-secondary text-sm italic" style="grid-column: span 2;">No allocations loaded. Make a request to sync quotas.</div>';
+            allocationCardsHtml = '<div class="text-on-surface-variant text-xs italic py-4 col-span-2">No allocations loaded. Make a request to sync quotas.</div>';
         } else {
             details.forEach(([cat, quotas]) => {
                 const best = Math.round(Math.max(...quotas.map(q => q.remainingFraction * 100)));
                 const isSandboxDown = acc.cooldowns && acc.cooldowns[`sandbox|${cat}`] > Date.now();
                 const isCliDown = acc.cooldowns && acc.cooldowns[`cli|${cat}`] > Date.now();
                 
-                let barColor = 'var(--status-healthy)';
-                if (best < 20) barColor = 'var(--status-dead)';
-                else if (best < 50) barColor = 'var(--status-degraded)';
+                let barColor = '#38e5a6';
+                if (best < 20) barColor = '#ffb4ab';
+                else if (best < 50) barColor = '#f59e0b';
                 
                 allocationCardsHtml += `
-                    <div class="allocation-card">
-                        <div class="allocation-header">
-                            <span class="allocation-name">${cat}</span>
-                            <span class="text-sm font-semibold" style="color: ${barColor}">${best}%</span>
+                    <div class="bg-surface-container-low/60 p-4 rounded-2xl border border-outline-variant/20 flex flex-col gap-2 shadow-inner">
+                        <div class="flex justify-between items-center">
+                            <span class="font-bold text-on-surface text-xs">${cat}</span>
+                            <span class="text-xs font-bold" style="color: ${barColor}">${best}%</span>
                         </div>
-                        <div class="allocation-bar-bg">
-                            <div class="allocation-bar-fill" style="width: ${best}%; background: ${barColor}"></div>
+                        <div class="w-full h-1.5 bg-surface-container-lowest rounded-full overflow-hidden">
+                            <div class="h-full rounded-full transition-all duration-300" style="width: ${best}%; background: ${barColor}"></div>
                         </div>
-                        <div class="pool-indicators">
-                            <div class="pool-indicator" title="Sandbox Pool Status">
-                                <span class="indicator-dot ${isSandboxDown ? 'offline' : 'online'}"></span>
-                                SBX
+                        <div class="flex justify-between mt-1">
+                            <div class="flex items-center gap-1.5 text-[10px] font-mono text-on-surface-variant">
+                                <span class="w-2 h-2 rounded-full ${isSandboxDown ? 'bg-error' : 'bg-secondary'}"></span>
+                                <span>SBX</span>
                             </div>
-                            <div class="pool-indicator" title="CLI Pool Status">
-                                <span class="indicator-dot ${isCliDown ? 'offline' : 'online'}"></span>
-                                CLI
+                            <div class="flex items-center gap-1.5 text-[10px] font-mono text-on-surface-variant">
+                                <span class="w-2 h-2 rounded-full ${isCliDown ? 'bg-error' : 'bg-secondary'}"></span>
+                                <span>CLI</span>
                             </div>
                         </div>
                     </div>
@@ -620,31 +633,31 @@ function renderDashboard() {
         }
 
         trDetails.innerHTML = `
-            <td colspan="5" style="padding: 1.5rem; background: rgba(0,0,0,0.15); border-bottom: 1px solid var(--glass-border);">
-                <div class="account-details-container">
-                    <div class="details-left">
-                        <div class="details-section-title">Resource Allocations</div>
-                        <div class="allocation-cards">
+            <td colspan="5" class="p-6">
+                <div class="flex flex-col lg:flex-row gap-6">
+                    <div class="flex-1">
+                        <div class="text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider mb-4">Resource Allocations</div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             ${allocationCardsHtml}
                         </div>
                     </div>
-                    <div class="details-right">
-                        <div class="details-section-title">Configuration</div>
-                        <div class="glass-card p-4 flex flex-col gap-3" style="background: rgba(0,0,0,0.2);">
-                            <div class="input-group">
-                                <label class="text-secondary text-sm mb-1 block">Project ID</label>
-                                <div class="inline-edit-group" onclick="event.stopPropagation()">
-                                    <input type="text" id="pid-input-${safeEmail}" class="glass-input w-full" value="${acc.projectId || ''}" style="padding: 0.35rem 0.5rem; font-size: 0.8rem; background: rgba(0,0,0,0.3);">
-                                    <button class="action-btn sm" onclick="saveProjectId('${acc.email}', event)" style="padding: 0.35rem 0.75rem;">Save</button>
+                    <div class="w-full lg:w-[320px] shrink-0">
+                        <div class="text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider mb-4">Configuration</div>
+                        <div class="card-surface p-4 rounded-2xl border border-outline-variant/30 flex flex-col gap-4 shadow-lg">
+                            <div class="flex flex-col gap-2">
+                                <label class="text-xs text-on-surface-variant font-bold uppercase tracking-wider">Project ID</label>
+                                <div class="flex gap-2" onclick="event.stopPropagation()">
+                                    <input type="text" id="pid-input-${safeEmail}" class="flex-1 bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-1.5 text-xs text-on-surface focus:outline-none focus:border-primary-fixed-dim" value="${acc.projectId || ''}">
+                                    <button class="bg-primary-fixed-dim text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-primary-fixed transition-colors active:scale-95" onclick="saveProjectId('${acc.email}', event)">Save</button>
                                 </div>
                             </div>
-                            <div class="flex gap-2 mt-2" onclick="event.stopPropagation()">
-                                <button class="action-btn sm w-full" onclick="discoverProjectId('${acc.email}', event)">Rediscover</button>
-                                <button class="action-btn sm danger w-full" onclick="deleteAccount('${acc.email}', event)">Delete</button>
+                            <div class="flex gap-2" onclick="event.stopPropagation()">
+                                <button class="flex-1 bg-surface-container-high text-on-surface px-3 py-2 rounded-xl text-xs font-semibold border border-outline-variant/40 hover:bg-surface-container-highest transition-colors active:scale-95" onclick="discoverProjectId('${acc.email}', event)">Rediscover</button>
+                                <button class="flex-1 bg-error-container/20 text-error px-3 py-2 rounded-xl text-xs font-semibold border border-error/30 hover:bg-error-container/40 transition-colors active:scale-95" onclick="deleteAccount('${acc.email}', event)">Delete</button>
                             </div>
                             ${isChallenge ? `
-                            <div class="mt-2" onclick="event.stopPropagation()">
-                                <a href="${acc.challenge.url}" target="_blank" class="action-btn sm w-full text-center" style="display: block; text-decoration: none; border-color: var(--status-dead); color: var(--status-dead); background: rgba(244,63,86,0.1)">
+                            <div onclick="event.stopPropagation()">
+                                <a href="${acc.challenge.url}" target="_blank" class="w-full text-center bg-error-container/20 text-error border border-error/30 hover:bg-error-container/40 px-3 py-2 rounded-xl text-xs font-semibold block transition-colors shadow-lg">
                                     Solve Verification (Web)
                                 </a>
                             </div>
@@ -905,7 +918,9 @@ async function loadSettings() {
                     if (el) {
                         el.disabled = isFast;
                         const row = el.closest('.toggle-row');
-                        if (row) row.style.opacity = isFast ? '0.5' : '1';
+                        if (row) {
+                            row.style.opacity = isFast ? '0.5' : '1';
+                        }
                         if (isFast) {
                             if (el.dataset.previousState === undefined) {
                                 el.dataset.previousState = el.checked;
@@ -931,7 +946,7 @@ async function loadSettings() {
                         const row = loggingEl.closest('.toggle-row');
                         if (row) {
                             row.style.opacity = '0.8';
-                            row.style.border = '1px solid var(--md-primary)';
+                            row.style.borderColor = '#d0bcff';
                         }
                     } else {
                         if (loggingEl.dataset.previousState !== undefined) {
@@ -942,7 +957,7 @@ async function loadSettings() {
                         const row = loggingEl.closest('.toggle-row');
                         if (row) {
                             row.style.opacity = '1';
-                            row.style.border = '1px solid transparent';
+                            row.style.borderColor = 'rgba(62, 49, 99, 0.2)';
                         }
                     }
                 }
@@ -958,9 +973,7 @@ async function loadSettings() {
                         const row = sanitizeEl.closest('.toggle-row');
                         if (row) {
                             row.style.opacity = '0.8';
-                            row.style.border = '1px solid var(--status-healthy)';
-                            row.style.borderRadius = '8px';
-                            row.style.padding = '8px';
+                            row.style.borderColor = '#38e5a6';
                         }
                     } else {
                         if (sanitizeEl.dataset.previousState !== undefined) {
@@ -971,8 +984,7 @@ async function loadSettings() {
                         const row = sanitizeEl.closest('.toggle-row');
                         if (row) {
                             row.style.opacity = '1';
-                            row.style.border = 'none';
-                            row.style.padding = '0';
+                            row.style.borderColor = 'rgba(62, 49, 99, 0.2)';
                         }
                     }
                 }
@@ -1141,8 +1153,9 @@ function clearChat() {
     state.playgroundMessages = [];
     const history = document.getElementById('chat-history');
     history.innerHTML = `
-        <div class="chat-bubble assistant">
-            <div class="bubble-content">Sandbox reset. Ready for inference.</div>
+        <div class="chat-bubble assistant bg-primary-fixed-dim/5 border border-primary-fixed-dim/10 rounded-2xl p-4 flex flex-col gap-2 max-w-[85%] self-start shadow-md">
+            <div class="text-[10px] text-primary-fixed-dim font-mono font-bold uppercase tracking-wider">Assistant</div>
+            <div class="bubble-content text-on-surface text-sm">Sandbox reset. Ready for inference.</div>
         </div>
     `;
 }
@@ -1162,22 +1175,44 @@ async function sendChat() {
     
     // Add user bubble
     const userBubble = document.createElement('div');
-    userBubble.className = 'chat-bubble user';
-    userBubble.innerHTML = `<div class="bubble-content">${escapeHTML(text)}</div>`;
+    userBubble.className = 'chat-bubble user bg-surface-container-low border border-outline-variant/30 rounded-2xl p-4 flex flex-col gap-2 max-w-[85%] self-end shadow-md';
+    userBubble.innerHTML = `
+        <div class="text-[10px] text-on-surface-variant font-mono font-bold uppercase tracking-wider">User</div>
+        <div class="bubble-content text-on-surface text-sm whitespace-pre-wrap">${escapeHTML(text)}</div>
+    `;
     history.appendChild(userBubble);
     history.scrollTop = history.scrollHeight;
     
     // Add assistant bubble (loading indicator)
     const astBubble = document.createElement('div');
-    astBubble.className = 'chat-bubble assistant';
+    astBubble.className = 'chat-bubble assistant bg-primary-fixed-dim/5 border border-primary-fixed-dim/10 rounded-2xl p-4 flex flex-col gap-2 max-w-[85%] self-start shadow-md';
+    
+    const astHeader = document.createElement('div');
+    astHeader.className = 'text-[10px] text-primary-fixed-dim font-mono font-bold uppercase tracking-wider';
+    astHeader.textContent = 'Assistant';
+    astBubble.appendChild(astHeader);
+
     const astContent = document.createElement('div');
-    astContent.className = 'bubble-content';
-    astContent.innerHTML = '<span class="pulse-ring" style="display:inline-block; margin-top: 4px;"></span>';
+    astContent.className = 'bubble-content text-on-surface text-sm';
+    astContent.innerHTML = `
+        <div class="flex gap-1.5 items-center py-2">
+            <div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim animate-bounce"></div>
+            <div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim animate-bounce [animation-delay:0.2s]"></div>
+            <div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim animate-bounce [animation-delay:0.4s]"></div>
+        </div>
+    `;
     astBubble.appendChild(astContent);
     history.appendChild(astBubble);
     history.scrollTop = history.scrollHeight;
     
     const model = document.getElementById('play-model').value;
+    if (!model) {
+        astContent.innerHTML = `<span class="text-error font-medium">Error: No model selected. Please wait for models to load or check your connection.</span>`;
+        inputEl.disabled = false;
+        sendBtn.disabled = false;
+        return;
+    }
+    
     const system = document.getElementById('play-system').value;
     const stream = document.getElementById('play-stream').checked;
     
@@ -1247,12 +1282,18 @@ async function sendChat() {
                                 
                                 let innerHTML = '';
                                 if (reasoningText) {
-                                    innerHTML += `<div class="thinking-block" style="opacity: 0.7; font-size: 0.85rem; border-left: 2px solid var(--md-primary); padding-left: 8px; margin-bottom: 8px; font-style: italic;">${escapeHTML(reasoningText)}</div>`;
+                                    innerHTML += `<div class="thinking-block border-l-2 border-primary-fixed-dim pl-3 mb-2 text-xs italic opacity-70">${escapeHTML(reasoningText)}</div>`;
                                 }
                                 if (fullText) {
                                     innerHTML += `<div class="markdown-body">${DOMPurify.sanitize(marked.parse(fullText))}</div>`;
                                 }
-                                astContent.innerHTML = innerHTML || '<span class="pulse-ring" style="display:inline-block; margin-top: 4px;"></span>';
+                                astContent.innerHTML = innerHTML || `
+                                    <div class="flex gap-1.5 items-center py-2">
+                                        <div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim animate-bounce"></div>
+                                        <div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim animate-bounce [animation-delay:0.2s]"></div>
+                                        <div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim animate-bounce [animation-delay:0.4s]"></div>
+                                    </div>
+                                `;
                                 attachCopyButtons(astContent);
                                 history.scrollTop = history.scrollHeight;
                             }
@@ -1271,7 +1312,7 @@ async function sendChat() {
             
             let innerHTML = '';
             if (fullReasoningText) {
-                innerHTML += `<div class="thinking-block" style="opacity: 0.7; font-size: 0.85rem; border-left: 2px solid var(--md-primary); padding-left: 8px; margin-bottom: 8px; font-style: italic;">${escapeHTML(fullReasoningText)}</div>`;
+                innerHTML += `<div class="thinking-block border-l-2 border-primary-fixed-dim pl-3 mb-2 text-xs italic opacity-70">${escapeHTML(fullReasoningText)}</div>`;
             }
             if (fullResponseText) {
                 innerHTML += `<div class="markdown-body">${DOMPurify.sanitize(marked.parse(fullResponseText))}</div>`;
@@ -1285,7 +1326,7 @@ async function sendChat() {
         state.playgroundMessages.push({ role: 'user', content: text });
         state.playgroundMessages.push({ role: 'assistant', content: fullResponseText });
     } catch (err) {
-        astContent.innerHTML = `<span style="color: var(--status-dead)">Error: ${err.message}</span>`;
+        astContent.innerHTML = `<span class="text-error font-medium">Error: ${err.message}</span>`;
     } finally {
         inputEl.disabled = false;
         sendBtn.disabled = false;

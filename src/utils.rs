@@ -6,6 +6,15 @@ use once_cell::sync::Lazy;
 use std::hash::{Hash, Hasher};
 use crate::config::{get_proxy_config, get_effective_features};
 
+pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .tcp_nodelay(true)
+        .pool_max_idle_per_host(20)
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .unwrap_or_default()
+});
+
 pub fn generate_uuid_v4() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -104,7 +113,7 @@ pub fn cache_signature(conversation_id: &str, thought: &str, signature: &str) {
 pub fn get_signature(conversation_id: &str, thought: &str) -> Option<String> {
     let hash = hash_string(thought.trim());
     let key = format!("{}:{}", conversation_id, hash);
-    SIGNATURE_CACHE.lock().unwrap().get_and_remove(&key)
+    SIGNATURE_CACHE.lock().unwrap().get(&key)
 }
 
 pub fn cache_call_id_signature(call_id: &str, signature: &str) {
@@ -112,7 +121,7 @@ pub fn cache_call_id_signature(call_id: &str, signature: &str) {
 }
 
 pub fn get_call_id_signature(call_id: &str) -> Option<String> {
-    CALL_ID_SIGNATURE_CACHE.lock().unwrap().get_and_remove(&call_id.to_string())
+    CALL_ID_SIGNATURE_CACHE.lock().unwrap().get(&call_id.to_string())
 }
 
 pub fn get_exact_cache(hash: &str) -> Option<CachedResponse> {
@@ -165,7 +174,7 @@ pub fn clean_json_schema_for_antigravity(schema: Value, aggressive: bool) -> Val
                 serde_json::json!({ "type": "NULL" })
             }
         }
-        Value::Object(mut map) => {
+        Value::Object(map) => {
             if let Some(any_of) = map.get("anyOf").or(map.get("oneOf")).and_then(|v| v.as_array()) {
                 let best = any_of.iter()
                     .find(|v| v.get("type").and_then(|t| t.as_str()) == Some("object"))
@@ -503,7 +512,7 @@ pub fn transform_to_google_body(
     session_id: Option<&str>,
     aggressive: bool,
 ) -> Value {
-    let proxy_config = get_proxy_config();
+    let _proxy_config = get_proxy_config();
     let features = get_effective_features();
     
     let raw_model = openai_body.get("model").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
@@ -655,7 +664,8 @@ pub fn transform_to_google_body(
                         parts.push(serde_json::json!({
                             "thought": true,
                             "text": thought,
-                            "thoughtSignature": sig
+                            "thoughtSignature": sig,
+                            "thought_signature": sig
                         }));
                     }
                 }
@@ -667,7 +677,9 @@ pub fn transform_to_google_body(
                         if part.get("type").and_then(|t| t.as_str()) == Some("text") {
                             if let Some(txt) = part.get("text").and_then(|t| t.as_str()) {
                                 let text_content = remove_base64_images(txt);
-                                parts.push(serde_json::json!({ "text": text_content }));
+                                if !text_content.trim().is_empty() {
+                                    parts.push(serde_json::json!({ "text": text_content }));
+                                }
                             }
                         } else if part.get("type").and_then(|t| t.as_str()) == Some("image_url") {
                             if let Some(url) = part.get("image_url").and_then(|iu| iu.get("url")).and_then(|u| u.as_str()) {
@@ -686,7 +698,9 @@ pub fn transform_to_google_body(
                     }
                 } else if let Some(txt) = content.as_str() {
                     let text_content = remove_base64_images(txt);
-                    parts.push(serde_json::json!({ "text": text_content }));
+                    if !text_content.trim().is_empty() {
+                        parts.push(serde_json::json!({ "text": text_content }));
+                    }
                 }
             }
 
@@ -717,7 +731,7 @@ pub fn transform_to_google_body(
                             "args": args
                         });
 
-                        if google_model.contains("claude") || google_model.contains("gemini-3") || google_model.contains("gemini-pro-agent") || google_model.contains("flash_lite_preview") {
+                        if google_model.contains("claude") {
                             func_call.as_object_mut().unwrap().insert("id".to_string(), Value::String(clean_id));
                         }
 
@@ -726,7 +740,8 @@ pub fn transform_to_google_body(
                         });
 
                         if !sig.is_empty() {
-                            func_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(sig));
+                            func_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(sig.clone()));
+                            func_part.as_object_mut().unwrap().insert("thought_signature".to_string(), Value::String(sig));
                         }
 
                         parts.push(func_part);
@@ -1258,9 +1273,10 @@ pub fn transform_google_event_to_openai(
 
             if let Some(txt) = part.get("text").and_then(|v| v.as_str()) {
                 let mut clean_text = txt.to_string();
-                if clean_text.contains("thoughtSignature:") {
-                    while let Some(start_idx) = clean_text.find("thoughtSignature:") {
-                        let mut end_idx = start_idx + "thoughtSignature:".len();
+                if clean_text.contains("thoughtSignature:") || clean_text.contains("thought_signature:") {
+                    while let Some(start_idx) = clean_text.find("thoughtSignature:").or_else(|| clean_text.find("thought_signature:")) {
+                        let prefix_len = if clean_text[start_idx..].starts_with("thoughtSignature:") { "thoughtSignature:".len() } else { "thought_signature:".len() };
+                        let mut end_idx = start_idx + prefix_len;
                         let bytes = clean_text.as_bytes();
                         while end_idx < bytes.len() {
                             let c = bytes[end_idx];
@@ -1342,9 +1358,15 @@ pub fn transform_google_event_to_openai(
                     serde_json::to_string(args_val).unwrap_or_else(|_| "{}".to_string())
                 };
 
+                let display_id = if !sig.is_empty() {
+                    format!("sig-{}-{}", sig, call_id)
+                } else {
+                    call_id.clone()
+                };
+
                 tool_calls.push(serde_json::json!({
                     "index": tool_calls.len(),
-                    "id": call_id,
+                    "id": display_id,
                     "type": "function",
                     "function": {
                         "name": original_name,
