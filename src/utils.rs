@@ -675,17 +675,22 @@ pub fn transform_to_google_body(
                 "functionResponse": func_resp
             }));
         } else {
-            if (role == "assistant" || role == "model") && !session_uuid.is_empty() {
+            if role == "assistant" || role == "model" {
                 let thought_text = msg.get("thought").and_then(|v| v.as_str())
                     .or_else(|| msg.get("reasoning_content").and_then(|v| v.as_str()));
                 if let Some(thought) = thought_text {
-                    if let Some(sig) = get_signature(session_uuid, thought) {
-                        parts.push(serde_json::json!({
+                    if !thought.trim().is_empty() {
+                        let mut thought_part = serde_json::json!({
                             "thought": true,
-                            "text": thought,
-                            "thoughtSignature": sig,
-                            "thought_signature": sig
-                        }));
+                            "text": thought
+                        });
+                        if !session_uuid.is_empty() {
+                            if let Some(sig) = get_signature(session_uuid, thought) {
+                                thought_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(sig.clone()));
+                                thought_part.as_object_mut().unwrap().insert("thought_signature".to_string(), Value::String(sig));
+                            }
+                        }
+                        parts.push(thought_part);
                     }
                 }
             }
@@ -1042,7 +1047,7 @@ pub fn transform_to_google_body(
             "thinkingBudget": budget,
             "includeThoughts": true
         });
-        if google_model.contains("gemini-3") && is_cli {
+        if google_model.contains("gemini-3") {
             let level = adaptive_tier.or(extracted_tier.map(|s| s.to_string())).unwrap_or_else(|| "low".to_string());
             thinking_config.as_object_mut().unwrap().insert("thinkingLevel".to_string(), Value::String(level));
         }

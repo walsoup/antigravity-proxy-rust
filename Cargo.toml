@@ -1,6 +1,6 @@
 [package]
 name = "antigravity-proxy-rust"
-version = "2.2.1"
+version = "2.3.0"
 edition = "2024"
 
 [dependencies]
@@ -26,7 +26,7 @@ dotenvy = "0.15"
 chrono-tz = "0.9.0"
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
