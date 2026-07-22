@@ -1286,9 +1286,11 @@ pub fn transform_google_event_to_openai(
 
     if let Some(parts_arr) = parts {
         for part in parts_arr {
-            let is_thought = part.get("thought").is_some() || 
-                part.get("thoughtText").is_some() || 
-                part.get("type").and_then(|t| t.as_str()) == Some("thinking");
+            let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false) ||
+                part.get("thought").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) ||
+                part.get("thoughtText").map(|v| v.as_bool().unwrap_or(true)).unwrap_or(false) ||
+                part.get("thought_text").map(|v| v.as_bool().unwrap_or(true)).unwrap_or(false) ||
+                part.get("type").and_then(|t| t.as_str()).map(|t| t == "thinking" || t == "thought").unwrap_or(false);
 
             if let Some(txt) = part.get("text").and_then(|v| v.as_str()) {
                 let mut clean_text = txt.to_string();
