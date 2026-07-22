@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashSet, HashMap};
 use std::sync::RwLock;
@@ -6,8 +5,8 @@ use once_cell::sync::Lazy;
 use chrono::{DateTime, Utc};
 use crate::config::get_proxy_config;
 use crate::auth::{
-    AntigravityAccount, QuotaEntry, get_accounts, save_accounts_config,
-    refresh_access_token, get_impersonation_headers_builder, generate_fingerprint_for_email, ensure_fingerprint
+    AntigravityAccount, QuotaEntry, get_accounts,
+    refresh_access_token, get_impersonation_headers_builder, ensure_fingerprint
 };
 
 pub static SUPPORTED_MODELS_CACHE: Lazy<RwLock<HashSet<String>>> = Lazy::new(|| RwLock::new(HashSet::new()));
@@ -248,7 +247,7 @@ fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
                 group.group_name = group.labels.join(" / ");
             }
         } else {
-            let mut reset_time = quota_info.get("quotaResetTime")
+            let reset_time = quota_info.get("quotaResetTime")
                 .or_else(|| m.get("quotaResetTime"))
                 .or_else(|| quota_info.get("resetTime"))
                 .or_else(|| m.get("resetTime"))

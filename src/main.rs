@@ -884,12 +884,12 @@ async fn handle_chat_completion_internal(
     let is_streaming = openai_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // Exact Request Caching check
-    let mut cache_hash = None;
+    let mut _cache_hash = None;
     if config_features.exact_request_caching && is_streaming {
         let mut hashable = openai_body.clone();
         hashable.as_object_mut().unwrap().remove("stream");
         let hash_str = hash_string(&hashable.to_string()).to_string();
-        cache_hash = Some(hash_str.clone());
+        _cache_hash = Some(hash_str.clone());
         if let Some(cached) = get_exact_cache(&hash_str) {
             log_info!("[Cache] Exact match cache hit for {}", hash_str);
             let chunks = cached.chunks;
@@ -1431,11 +1431,11 @@ fn pipe_stream_events(
         let loop_detected = false;
         let mut finish_event_line: Option<String> = None;
         let mut recent_content_buffer = String::new();
-        let mut is_halted = false;
+        let is_halted = false;
 
         let mut is_intercepting = false;
         let mut intercepted_query = String::new();
-        let mut tool_call_id = String::new();
+        let mut _tool_call_id = String::new();
 
         let config_features = get_effective_features();
 
@@ -1551,7 +1551,7 @@ fn pipe_stream_events(
                                 if tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) == Some("google_search") {
                                     is_intercepting = true;
                                     if let Some(tc_id) = tc.get("id").and_then(|v| v.as_str()) {
-                                        tool_call_id = tc_id.to_string();
+                                        _tool_call_id = tc_id.to_string();
                                     }
                                 }
                                 if is_intercepting {
@@ -1590,21 +1590,21 @@ fn pipe_stream_events(
                             }
                             client_headers.insert("x-internal-search", header::HeaderValue::from_static("true"));
 
-                            let mut search_result = "No results found.".to_string();
-                            match run_internal_completion(client_headers.clone(), search_payload).await {
+                            let _search_result = match run_internal_completion(client_headers.clone(), search_payload).await {
                                 Ok(search_res) => {
-                                    search_result = search_res.get("choices")
+                                    search_res.get("choices")
                                         .and_then(|c| c.get(0))
                                         .and_then(|c| c.get("message"))
                                         .and_then(|m| m.get("content"))
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("No results found.")
-                                        .to_string();
+                                        .to_string()
                                 }
                                 Err(e) => {
                                     log_err!("Search intercept execution failed: {}", e);
+                                    "No results found.".to_string()
                                 }
-                            }
+                            };
 
                             // Normally, this involves appending assistant tool call, followed by tool message
                             // and making next completion call
@@ -1624,7 +1624,6 @@ fn pipe_stream_events(
 
                                 if detect_loop(&recent_content_buffer) {
                                     log_warn!("[Stream] Detected infinite loop pattern in output. Halting stream.");
-                                    is_halted = true;
                                     
                                     let loop_chunk = serde_json::json!({
                                         "id": openai_chunk.id,

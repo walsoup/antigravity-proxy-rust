@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
 use std::sync::{Arc, RwLock};
 use once_cell::sync::Lazy;
 use rand::seq::SliceRandom;
@@ -132,6 +130,7 @@ pub struct GoogleTokenResponse {
     pub refresh_token: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct StorageFormat {
     accounts: Vec<AntigravityAccount>,

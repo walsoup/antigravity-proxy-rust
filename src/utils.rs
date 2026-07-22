@@ -577,7 +577,6 @@ pub fn transform_to_google_body(
             }
         }
     } else {
-        google_model = google_model.replace("-preview", "");
         if raw_model.contains("proactive-observer") || base_model.contains("proactive-observer") {
             google_model = "models/proactive-observer".to_string();
         } else if raw_model.contains("m50") || base_model.contains("m50") {
@@ -616,7 +615,7 @@ pub fn transform_to_google_body(
         } else if base_model.contains("gemini-3-flash") {
             google_model = "gemini-3-flash".to_string();
         } else {
-            google_model = base_model;
+            google_model = base_model.replace("-preview", "");
         }
 
         if google_model == "claude-opus-4-6" || google_model == "antigravity-claude-opus-4-6" {
