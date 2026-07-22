@@ -9,8 +9,9 @@ use crate::config::{get_proxy_config, get_effective_features};
 pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .tcp_nodelay(true)
-        .pool_max_idle_per_host(20)
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .pool_max_idle_per_host(50)
+        .pool_idle_timeout(std::time::Duration::from_secs(120))
         .build()
         .unwrap_or_default()
 });
@@ -520,7 +521,8 @@ pub fn transform_to_google_body(
     let mut google_model = resolved_model.clone();
 
     // Check for thinking effort/tier suffix
-    let tier_match = if raw_model.ends_with("-low") { Some("low") }
+    let tier_match = if raw_model.contains("gpt-oss-120b") { None }
+        else if raw_model.ends_with("-low") { Some("low") }
         else if raw_model.ends_with("-medium") { Some("medium") }
         else if raw_model.ends_with("-high") { Some("high") }
         else if raw_model.ends_with("-xhigh") { Some("xhigh") }
@@ -576,7 +578,24 @@ pub fn transform_to_google_body(
         }
     } else {
         google_model = google_model.replace("-preview", "");
-        if base_model.contains("gemini-3.1-pro") {
+        if raw_model.contains("proactive-observer") || base_model.contains("proactive-observer") {
+            google_model = "models/proactive-observer".to_string();
+        } else if raw_model.contains("m50") || base_model.contains("m50") {
+            google_model = "gemini-3.1-flash-lite".to_string();
+        } else if raw_model.contains("gpt-oss-120b") || base_model.contains("gpt-oss-120b") {
+            google_model = "gpt-oss-120b-medium".to_string();
+        } else if base_model.contains("gemini-3.6-flash") {
+            let tier = adaptive_tier.as_deref().unwrap_or("high");
+            if tier == "low" {
+                google_model = "gemini-3.6-flash-low".to_string();
+            } else if tier == "medium" {
+                google_model = "gemini-3.6-flash-medium".to_string();
+            } else if tier == "tiered" {
+                google_model = "gemini-3.6-flash-tiered".to_string();
+            } else {
+                google_model = "gemini-3.6-flash-high".to_string();
+            }
+        } else if base_model.contains("gemini-3.1-pro") {
             let tier = adaptive_tier.as_deref().unwrap_or("low");
             if tier == "xhigh" || tier == "high" {
                 google_model = "gemini-pro-agent".to_string();
@@ -853,7 +872,7 @@ pub fn transform_to_google_body(
 
     let mut final_contents = contents;
 
-    if features.safeguard_empty_content {
+    if true || features.safeguard_empty_content {
         for c in &mut final_contents {
             let mut has_content = false;
             if let Some(parts) = c.get("parts").and_then(|p| p.as_array()) {
@@ -917,7 +936,7 @@ pub fn transform_to_google_body(
         }
     }
 
-    if features.safeguard_roles {
+    if true || features.safeguard_roles {
         let mut merged: Vec<Value> = Vec::new();
         for c in final_contents {
             let role = c.get("role").and_then(|r| r.as_str()).unwrap_or("user");

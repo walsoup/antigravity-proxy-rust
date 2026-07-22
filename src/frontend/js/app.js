@@ -575,6 +575,7 @@ function renderDashboard() {
                 </div>
             </td>
             <td class="p-4 text-xs text-on-surface-variant font-mono">${(acc.type || 'Standard').toUpperCase()}</td>
+            <td class="p-4 text-xs text-on-surface-variant font-mono">${acc.priority !== undefined && acc.priority !== null ? acc.priority : 0}</td>
             <td class="p-4 text-sm">
                 <div class="flex items-center gap-2">
                     <div class="w-2.5 h-2.5 rounded-full" style="background: ${healthClass}; box-shadow: 0 0 8px ${healthClass}"></div>
@@ -633,7 +634,7 @@ function renderDashboard() {
         }
 
         trDetails.innerHTML = `
-            <td colspan="5" class="p-6">
+            <td colspan="6" class="p-6">
                 <div class="flex flex-col lg:flex-row gap-6">
                     <div class="flex-1">
                         <div class="text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider mb-4">Resource Allocations</div>
@@ -649,6 +650,13 @@ function renderDashboard() {
                                 <div class="flex gap-2" onclick="event.stopPropagation()">
                                     <input type="text" id="pid-input-${safeEmail}" class="flex-1 bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-1.5 text-xs text-on-surface focus:outline-none focus:border-primary-fixed-dim" value="${acc.projectId || ''}">
                                     <button class="bg-primary-fixed-dim text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-primary-fixed transition-colors active:scale-95" onclick="saveProjectId('${acc.email}', event)">Save</button>
+                                </div>
+                            </div>
+                            <div class="flex flex-col gap-2">
+                                <label class="text-xs text-on-surface-variant font-bold uppercase tracking-wider">Priority</label>
+                                <div class="flex gap-2" onclick="event.stopPropagation()">
+                                    <input type="number" id="priority-input-${safeEmail}" class="flex-1 bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-1.5 text-xs text-on-surface focus:outline-none focus:border-primary-fixed-dim" value="${acc.priority !== undefined && acc.priority !== null ? acc.priority : 0}">
+                                    <button class="bg-primary-fixed-dim text-slate-950 px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-primary-fixed transition-colors active:scale-95" onclick="savePriority('${acc.email}', event)">Save</button>
                                 </div>
                             </div>
                             <div class="flex gap-2" onclick="event.stopPropagation()">
@@ -796,6 +804,35 @@ async function saveProjectId(email, event) {
         }
     } catch (e) {
         addLog(`Failed to save Project ID: ${e.message}`, 'error');
+    }
+}
+
+async function savePriority(email, event) {
+    if (event) event.stopPropagation();
+    const safeEmail = email.replace(/[@.]/g, '-');
+    const input = document.getElementById(`priority-input-${safeEmail}`);
+    const priority = parseInt(input.value.trim(), 10);
+    
+    if (isNaN(priority)) {
+        addLog(`Invalid priority value for ${email}`, 'error');
+        return;
+    }
+    
+    try {
+        const res = await apiFetch(`/api/accounts/${email}/priority`, {
+            method: 'POST',
+            body: JSON.stringify({ priority })
+        });
+        if (res.ok) {
+            addLog(`Priority for ${email} updated to ${priority}`, 'info');
+            const acc = state.accounts.find(a => a.email === email);
+            if (acc) acc.priority = priority;
+            renderDashboard();
+        } else {
+            addLog(`Failed to save Priority: ${await res.text()}`, 'error');
+        }
+    } catch (e) {
+        addLog(`Failed to save Priority: ${e.message}`, 'error');
     }
 }
 
@@ -1407,3 +1444,22 @@ setInterval(() => {
         renderChart();
     }
 }, 5000);
+
+function manualOauthCallback() {
+    const url = prompt("Paste the full callback URL that failed to load (e.g., https://127.0.0.1:3000/oauth-callback?code=...):");
+    if (!url) return;
+    
+    try {
+        const parsed = new URL(url);
+        const code = parsed.searchParams.get("code");
+        if (!code) {
+            showToast("No authorization code found in the URL.", "error");
+            return;
+        }
+        
+        // Redirect to our own server's oauth-callback endpoint with the code.
+        window.location.href = `/oauth-callback?code=${encodeURIComponent(code)}`;
+    } catch (e) {
+        showToast("Invalid URL format. Make sure you copy the entire URL starting with http.", "error");
+    }
+}

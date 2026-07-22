@@ -120,6 +120,7 @@ pub struct AntigravityAccount {
     pub challenge: Option<ChallengeEntry>,
     pub capabilities: Option<HashMap<String, bool>>,
     pub quota: Option<Vec<QuotaEntry>>,
+    pub priority: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -445,6 +446,14 @@ pub fn update_account_project(email: &str, project_id: &str) {
         let _ = save_accounts_config();
     }
 }
+pub fn update_account_priority(email: &str, priority: i32) {
+    let mut state = AUTH_STATE.write().unwrap();
+    if let Some(acc) = state.accounts.iter_mut().find(|a| a.email == email) {
+        acc.priority = Some(priority);
+        drop(state);
+        let _ = save_accounts_config();
+    }
+}
 
 pub async fn add_account(account: AntigravityAccount) {
     {
@@ -673,7 +682,9 @@ fn calculate_priority(account: &AntigravityAccount, now: u64, model: Option<&str
         }
     }
 
-    (health * config.scoring.weights.health) + (seconds_since_used * config.scoring.weights.lru)
+    let priority_val = account.priority.unwrap_or(0) as f64;
+
+    (health * config.scoring.weights.health) + (seconds_since_used * config.scoring.weights.lru) + priority_val
 }
 
 pub async fn get_best_account(
@@ -705,6 +716,7 @@ pub async fn get_best_account(
 
     if let Some(p) = pool {
         let family = model.map(get_family_name).unwrap_or_else(|| "Other".to_string());
+        let cooldown_map = get_cooldowns();
         
         // Primary candidates: not blacklisted/unsupported model, not quota exhausted, and not on cooldown
         let mut candidates: Vec<AntigravityAccount> = usable.iter().filter(|a| {
@@ -719,7 +731,6 @@ pub async fn get_best_account(
                 return false;
             }
             let key = format!("{}|{}|{}", a.email, p, family);
-            let cooldown_map = get_cooldowns();
             if let Some(&expiry) = cooldown_map.get(&key) {
                 if expiry > now {
                     return false;
@@ -741,7 +752,6 @@ pub async fn get_best_account(
                 if !exclude_emails.contains(&email) {
                     if let Some(sticky_account) = usable.iter().find(|a| a.email == email) {
                         let key = format!("{}|{}|{}", email, p, family);
-                        let cooldown_map = get_cooldowns();
                         if let Some(&expiry) = cooldown_map.get(&key) {
                             if expiry > now {
                                 let wait_ms = expiry - now;
@@ -770,7 +780,6 @@ pub async fn get_best_account(
                     }
                 }
                 let key = format!("{}|{}|{}", a.email, p, family);
-                let cooldown_map = get_cooldowns();
                 if let Some(&expiry) = cooldown_map.get(&key) {
                     expiry <= now + 300000
                 } else {
@@ -781,7 +790,6 @@ pub async fn get_best_account(
             candidates.sort_by(|a, b| {
                 let key_a = format!("{}|{}|{}", a.email, p, family);
                 let key_b = format!("{}|{}|{}", b.email, p, family);
-                let cooldown_map = get_cooldowns();
                 let exp_a = cooldown_map.get(&key_a).copied().unwrap_or(0);
                 let exp_b = cooldown_map.get(&key_b).copied().unwrap_or(0);
                 exp_a.cmp(&exp_b)
@@ -801,7 +809,6 @@ pub async fn get_best_account(
                 };
                 if let Some(email) = sticky_email {
                     let key = format!("{}|{}|{}", email, p, family);
-                    let cooldown_map = get_cooldowns();
                     let has_cooldown = cooldown_map.get(&key).map(|&exp| exp > now).unwrap_or(false);
                     if !has_cooldown {
                         if let Some(sticky) = candidates.iter().find(|a| a.email == email) {
@@ -970,15 +977,13 @@ pub struct OAuthConfig {
 }
 
 pub static OAUTH_SETTINGS: Lazy<OAuthConfig> = Lazy::new(|| {
-    let client_id = std::env::var("ANTIGRAVITY_CLIENT_ID").unwrap_or_default();
-    let client_secret = std::env::var("ANTIGRAVITY_CLIENT_SECRET").unwrap_or_default();
+    let mut client_id = std::env::var("ANTIGRAVITY_CLIENT_ID").unwrap_or_default();
+    let mut client_secret = std::env::var("ANTIGRAVITY_CLIENT_SECRET").unwrap_or_default();
     if client_id.is_empty() {
-        eprintln!("[Auth Error] ANTIGRAVITY_CLIENT_ID environment variable is required");
-        std::process::exit(1);
+        client_id = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com".to_string();
     }
     if client_secret.is_empty() {
-        eprintln!("[Auth Error] ANTIGRAVITY_CLIENT_SECRET environment variable is required");
-        std::process::exit(1);
+        client_secret = "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".to_string();
     }
 
     OAuthConfig {

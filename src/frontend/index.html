@@ -365,14 +365,17 @@
                                 <h3 class="font-bold text-on-surface text-lg">Active Pool Nodes</h3>
                                 <p class="text-xs text-on-surface-variant mt-0.5">Diagnostics and token balances of individual pool nodes</p>
                             </div>
-                            <div class="flex gap-2 flex-wrap w-full sm:w-auto">
-                                <a href="/oauth/start" class="flex-1 sm:flex-none bg-primary-fixed-dim text-slate-950 font-bold px-4 py-2 rounded-2xl text-xs flex items-center justify-center gap-1.5 hover:bg-primary-fixed transition-all duration-200 active:scale-95 shadow-md shadow-primary-fixed-dim/10">
+                            <div class="flex gap-2 flex-col sm:flex-row w-full sm:w-auto">
+                                <a href="/oauth/start" class="w-full sm:w-auto bg-primary-fixed-dim text-slate-950 font-bold px-4 py-2 rounded-2xl text-xs flex items-center justify-center gap-1.5 hover:bg-primary-fixed transition-all duration-200 active:scale-95 shadow-md shadow-primary-fixed-dim/10">
                                     <span class="material-symbols-outlined text-sm font-bold">add</span> Add Account
                                 </a>
-                                <button class="flex-1 sm:flex-none bg-surface-container-high text-on-surface px-4 py-2 rounded-2xl text-xs font-semibold border border-outline-variant/40 hover:bg-surface-container-highest transition-colors active:scale-95" onclick="resetAllAccounts()">
+                                <button class="w-full sm:w-auto bg-secondary-container text-on-secondary-container px-4 py-2 rounded-2xl text-xs font-semibold border border-outline-variant/40 hover:bg-secondary-fixed-dim transition-colors active:scale-95" onclick="manualOauthCallback()">
+                                    Paste Callback URL
+                                </button>
+                                <button class="w-full sm:w-auto bg-surface-container-high text-on-surface px-4 py-2 rounded-2xl text-xs font-semibold border border-outline-variant/40 hover:bg-surface-container-highest transition-colors active:scale-95" onclick="resetAllAccounts()">
                                     Reset Cooldowns
                                 </button>
-                                <button class="flex-1 sm:flex-none bg-error-container/20 text-error px-4 py-2 rounded-2xl text-xs font-semibold border border-error/30 hover:bg-error-container/40 transition-colors active:scale-95" onclick="purgeSystemState()">
+                                <button class="w-full sm:w-auto bg-error-container/20 text-error px-4 py-2 rounded-2xl text-xs font-semibold border border-error/30 hover:bg-error-container/40 transition-colors active:scale-95" onclick="purgeSystemState()">
                                     Purge State
                                 </button>
                             </div>
@@ -383,6 +386,7 @@
                                     <tr class="border-b border-outline-variant/20 bg-surface-container-lowest/30">
                                         <th class="p-4 text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider">Identity</th>
                                         <th class="p-4 text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider">Provider</th>
+                                        <th class="p-4 text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider">Priority</th>
                                         <th class="p-4 text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider">Health</th>
                                         <th class="p-4 text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider">Last Active</th>
                                         <th class="p-4 text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider text-right">Actions</th>
@@ -525,11 +529,28 @@ export ANTHROPIC_API_KEY="antigravity"
     "apiKey": "antigravity"
   },
   "models": {
+    "antigravity-auto": { "name": "Antigravity Auto Routing" },
+    "gemini-3.6-flash": { "name": "Gemini 3.6 Flash" },
+    "gemini-3.6-flash-high": { "name": "Gemini 3.6 Flash (High)" },
+    "gemini-3.6-flash-medium": { "name": "Gemini 3.6 Flash (Medium)" },
+    "gemini-3.6-flash-low": { "name": "Gemini 3.6 Flash (Low)" },
+    "gemini-3.6-flash-tiered": { "name": "Gemini 3.6 Flash (Tiered)" },
+    "gemini-3.5-flash": { "name": "Gemini 3.5 Flash" },
+    "gemini-3.5-flash-high": { "name": "Gemini 3.5 Flash (High)" },
     "gemini-3-flash": { "name": "Gemini 3 Flash" },
-    "gemini-3-flash-agent": { "name": "Gemini 3.5 Flash Agent" },
-    "gemini-3.5-flash-high": { "name": "Gemini 3.5 Flash High" },
-    "gemini-3.5-flash-low": { "name": "Gemini 3.5 Flash Medium" },
-    "gemini-pro-agent": { "name": "Gemini 3.1 Pro High" }
+    "gemini-3-flash-agent": { "name": "Gemini 3 Flash Agent" },
+    "gemini-3.1-flash-lite": { "name": "Gemini 3.1 Flash Lite" },
+    "gemini-3.1-flash-image": { "name": "Gemini 3.1 Flash Image" },
+    "gemini-3.1-pro": { "name": "Gemini 3.1 Pro" },
+    "gemini-pro-agent": { "name": "Gemini Pro Agent" },
+    "gemini-2.5-flash": { "name": "Gemini 2.5 Flash" },
+    "gemini-2.5-flash-lite": { "name": "Gemini 2.5 Flash Lite" },
+    "gemini-2.5-pro": { "name": "Gemini 2.5 Pro" },
+    "claude-opus-4-6-thinking": { "name": "Claude Opus 4.6 Thinking" },
+    "claude-sonnet-4-6": { "name": "Claude Sonnet 4.6" },
+    "gpt-oss-120b-medium": { "name": "GPT OSS 120B Medium" },
+    "proactive-observer": { "name": "Proactive Observer" },
+    "m50": { "name": "M50" }
   }
 }</pre>
                             </div>
@@ -551,13 +572,18 @@ export ANTHROPIC_API_KEY="antigravity"
 API Key: antigravity (or any string)
 
 Models available:
-- claude-sonnet-4-6
+- antigravity-auto
+- gemini-3.6-flash
+- gemini-3.6-flash-high / medium / low / tiered
+- gemini-3.5-flash / high
+- gemini-3-flash / agent
+- gemini-3.1-flash-lite / image / pro
+- gemini-pro-agent
+- gemini-2.5-flash / lite / pro
 - claude-opus-4-6-thinking
-- gemini-3-flash
-- gemini-3-flash-agent
-- gemini-3.5-flash-high
-- gemini-3.5-flash-low
-- gemini-pro-agent</pre>
+- claude-sonnet-4-6
+- gpt-oss-120b-medium
+- proactive-observer / m50</pre>
                             </div>
                         </div>
                     </div>

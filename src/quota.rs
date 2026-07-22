@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashSet, HashMap};
 use std::sync::RwLock;
@@ -5,8 +6,8 @@ use once_cell::sync::Lazy;
 use chrono::{DateTime, Utc};
 use crate::config::get_proxy_config;
 use crate::auth::{
-    AntigravityAccount, QuotaEntry, get_accounts,
-    refresh_access_token, get_impersonation_headers_builder, ensure_fingerprint
+    AntigravityAccount, QuotaEntry, get_accounts, save_accounts_config,
+    refresh_access_token, get_impersonation_headers_builder, generate_fingerprint_for_email, ensure_fingerprint
 };
 
 pub static SUPPORTED_MODELS_CACHE: Lazy<RwLock<HashSet<String>>> = Lazy::new(|| RwLock::new(HashSet::new()));
@@ -19,20 +20,27 @@ pub async fn fetch_quota(account: &AntigravityAccount, retry_enabled: bool) -> R
 
     let config = get_proxy_config();
     let sandbox_endpoints = config.endpoints.sandbox;
-    let url_str = sandbox_endpoints.first()
-        .map(|s| s.as_str())
-        .unwrap_or("https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent");
 
-    let mut base_url = "https://daily-cloudcode-pa.sandbox.googleapis.com".to_string();
-    if let Ok(parsed) = reqwest::Url::parse(url_str) {
-        if let Some(host) = parsed.host_str() {
-            let scheme = parsed.scheme();
-            let port = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
-            base_url = format!("{}://{}{}", scheme, host, port);
+    let mut candidate_base_urls = Vec::new();
+    for ep in &sandbox_endpoints {
+        let fixed_ep = ep.replace("daily-cloudcode-pa.googleapis.com", "daily-cloudcode-pa.sandbox.googleapis.com");
+        if let Ok(parsed) = reqwest::Url::parse(&fixed_ep) {
+            if let Some(host) = parsed.host_str() {
+                let scheme = parsed.scheme();
+                let port = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
+                let base = format!("{}://{}{}", scheme, host, port);
+                if !candidate_base_urls.contains(&base) {
+                    candidate_base_urls.push(base);
+                }
+            }
         }
     }
-
-    let fetch_url = format!("{}/v1internal:fetchAvailableModels", base_url);
+    if !candidate_base_urls.contains(&"https://daily-cloudcode-pa.sandbox.googleapis.com".to_string()) {
+        candidate_base_urls.push("https://daily-cloudcode-pa.sandbox.googleapis.com".to_string());
+    }
+    if !candidate_base_urls.contains(&"https://cloudcode-pa.googleapis.com".to_string()) {
+        candidate_base_urls.push("https://cloudcode-pa.googleapis.com".to_string());
+    }
 
     let fp = match &account.fingerprint {
         Some(f) => f.clone(),
@@ -52,58 +60,102 @@ pub async fn fetch_quota(account: &AntigravityAccount, retry_enabled: bool) -> R
     
     while attempts < max_attempts {
         attempts += 1;
-        
-        let headers = get_impersonation_headers_builder(&current_access_token, &fp, None, Some(project_id.as_str()));
-        let payload = serde_json::json!({
-            "project": project_id
-        });
+        let mut refreshed_in_loop = false;
+        let mut last_err = None;
 
-        let res = match client.post(&fetch_url)
-            .headers(headers)
-            .header("User-Agent", "antigravity")
-            .json(&payload)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => return Err(e.to_string()),
-        };
+        for base_url in &candidate_base_urls {
+            let fetch_url = format!("{}/v1internal:fetchAvailableModels", base_url);
+            let headers = get_impersonation_headers_builder(&current_access_token, &fp, None, Some(project_id.as_str()));
+            let payload = serde_json::json!({
+                "project": project_id
+            });
 
-        if res.status().as_u16() == 401 && attempts < max_attempts && !current_refresh_token.is_empty() {
-            println!("Quota fetch 401 for {}, refreshing token...", account.email);
-            match refresh_access_token(&current_refresh_token).await {
-                Ok(tokens) => {
-                    let now = Utc::now().timestamp_millis() as u64;
-                    if let Some(rt) = tokens.refresh_token.clone() {
-                        current_refresh_token = rt;
-                    }
-                    current_access_token = tokens.access_token.clone();
-                    
-                    // Update in storage
-                    let accounts = get_accounts();
-                    if let Some(acc_idx) = accounts.iter().position(|a| a.email == account.email) {
-                        let mut acc_copy = accounts[acc_idx].clone();
-                        if let Some(rt) = tokens.refresh_token {
-                            acc_copy.refresh_token = rt;
-                        }
-                        acc_copy.access_token = Some(tokens.access_token);
-                        acc_copy.expires_at = Some(now + (tokens.expires_in * 1000));
-                        add_account_updated(acc_copy).await;
-                    }
-                    continue; // retry
-                }
+            let res = match client.post(&fetch_url)
+                .headers(headers.clone())
+                .header("User-Agent", "antigravity")
+                .json(&payload)
+                .send()
+                .await
+            {
+                Ok(r) => r,
                 Err(e) => {
-                    return Err(format!("Token refresh failed during quota fetch retry: {}", e));
+                    last_err = Some(e.to_string());
+                    continue;
+                }
+            };
+
+            if res.status().as_u16() == 401 && attempts < max_attempts && !current_refresh_token.is_empty() {
+                println!("Quota fetch 401 for {}, refreshing token...", account.email);
+                match refresh_access_token(&current_refresh_token).await {
+                    Ok(tokens) => {
+                        let now = Utc::now().timestamp_millis() as u64;
+                        if let Some(rt) = tokens.refresh_token.clone() {
+                            current_refresh_token = rt;
+                        }
+                        current_access_token = tokens.access_token.clone();
+                        
+                        // Update in storage
+                        let accounts = get_accounts();
+                        if let Some(acc_idx) = accounts.iter().position(|a| a.email == account.email) {
+                            let mut acc_copy = accounts[acc_idx].clone();
+                            if let Some(rt) = tokens.refresh_token {
+                                acc_copy.refresh_token = rt;
+                            }
+                            acc_copy.access_token = Some(tokens.access_token);
+                            acc_copy.expires_at = Some(now + (tokens.expires_in * 1000));
+                            add_account_updated(acc_copy).await;
+                        }
+                        refreshed_in_loop = true;
+                        break; // Break inner candidate_base_urls loop to retry with new access token
+                    }
+                    Err(e) => {
+                        return Err(format!("Token refresh failed during quota fetch retry: {}", e));
+                    }
                 }
             }
+
+            // Fallback for 403 (SERVICE_DISABLED on project) to empty payload {} and no x-goog-user-project header
+            if res.status().as_u16() == 403 {
+                let mut headers_fallback = headers.clone();
+                headers_fallback.remove("x-goog-user-project");
+                if let Ok(res_empty) = client.post(&fetch_url)
+                    .headers(headers_fallback)
+                    .header("User-Agent", "antigravity")
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await
+                {
+                    if res_empty.status().is_success() {
+                        if let Ok(data) = res_empty.json::<Value>().await {
+                            return Ok(parse_quota_response(&data));
+                        }
+                    }
+                }
+            }
+
+            if !res.status().is_success() {
+                last_err = Some(format!("Quota fetch failed for {}: {}", account.email, res.status()));
+                continue;
+            }
+
+            let data = match res.json::<Value>().await {
+                Ok(d) => d,
+                Err(e) => {
+                    last_err = Some(e.to_string());
+                    continue;
+                }
+            };
+
+            return Ok(parse_quota_response(&data));
         }
 
-        if !res.status().is_success() {
-            return Err(format!("Quota fetch failed for {}: {}", account.email, res.status()));
+        if refreshed_in_loop {
+            continue;
         }
 
-        let data = res.json::<Value>().await.map_err(|e| e.to_string())?;
-        return Ok(parse_quota_response(&data));
+        if let Some(e) = last_err {
+            return Err(e);
+        }
     }
     
     Err("Exhausted quota fetch attempts".to_string())
@@ -114,64 +166,22 @@ async fn add_account_updated(account: AntigravityAccount) {
     crate::auth::add_account(account).await;
 }
 
-fn get_pacific_offset(utc: DateTime<Utc>) -> chrono::FixedOffset {
-    use chrono::{Datelike, TimeZone};
-    let year = utc.year();
-    
-    // DST in US begins on the second Sunday of March.
-    // Start checking from March 8th. The second Sunday will fall between March 8 and March 14.
-    let mut march_second_sunday = 8;
-    while march_second_sunday <= 14 {
-        if let Some(date) = Utc.with_ymd_and_hms(year, 3, march_second_sunday, 12, 0, 0).single() {
-            if date.weekday() == chrono::Weekday::Sun {
-                break;
-            }
-        }
-        march_second_sunday += 1;
-    }
-    
-    // DST in US ends on the first Sunday of November.
-    // Start checking from November 1st. The first Sunday will fall between November 1 and November 7.
-    let mut nov_first_sunday = 1;
-    while nov_first_sunday <= 7 {
-        if let Some(date) = Utc.with_ymd_and_hms(year, 11, nov_first_sunday, 12, 0, 0).single() {
-            if date.weekday() == chrono::Weekday::Sun {
-                break;
-            }
-        }
-        nov_first_sunday += 1;
-    }
-
-    let dst_start = Utc.with_ymd_and_hms(year, 3, march_second_sunday, 10, 0, 0).unwrap(); // 2:00 AM PST = 10:00 AM UTC
-    let dst_end = Utc.with_ymd_and_hms(year, 11, nov_first_sunday, 9, 0, 0).unwrap(); // 2:00 AM PDT = 9:00 AM UTC
-
-    if utc >= dst_start && utc < dst_end {
-        chrono::FixedOffset::west_opt(7 * 3600).unwrap()
-    } else {
-        chrono::FixedOffset::west_opt(8 * 3600).unwrap()
-    }
-}
-
 fn get_next_midnight_pt() -> String {
-    use chrono::TimeZone;
-    let now_utc = Utc::now();
-    let offset = get_pacific_offset(now_utc);
-    let now_pt = now_utc.with_timezone(&offset);
+    // Current time in Los Angeles
+    let pt_tz = chrono_tz::US::Pacific;
+    let now_pt = Utc::now().with_timezone(&pt_tz);
     
     // Set to 00:00:00 of next day
     let tomorrow_pt = (now_pt + chrono::Duration::days(1))
         .date_naive()
         .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(pt_tz)
         .unwrap();
-    
-    // Get the tentative UTC time of tomorrow's midnight PT, then find the correct offset at that time
-    let tentative_utc = offset.from_local_datetime(&tomorrow_pt).unwrap().with_timezone(&Utc);
-    let correct_offset = get_pacific_offset(tentative_utc);
-    let tomorrow_midnight_utc = correct_offset.from_local_datetime(&tomorrow_pt).unwrap().with_timezone(&Utc);
-    
-    tomorrow_midnight_utc.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
 
+    let utc_dt: DateTime<Utc> = tomorrow_pt.with_timezone(&Utc);
+    utc_dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
 
 fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
     let raw_models = data.get("availableModels")
@@ -238,7 +248,7 @@ fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
                 group.group_name = group.labels.join(" / ");
             }
         } else {
-            let reset_time = quota_info.get("quotaResetTime")
+            let mut reset_time = quota_info.get("quotaResetTime")
                 .or_else(|| m.get("quotaResetTime"))
                 .or_else(|| quota_info.get("resetTime"))
                 .or_else(|| m.get("resetTime"))
@@ -260,12 +270,11 @@ fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
                         reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
                     }
                 } else if let Some(s) = rt.as_str() {
-                    if let Some(sec_str) = s.strip_suffix('s') {
-                        if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                            if let Ok(sec) = sec_str.parse::<i64>() {
-                                if let Some(dt) = DateTime::from_timestamp_millis(Utc::now().timestamp_millis() + sec * 1000) {
-                                    reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-                                }
+                    if s.ends_with('s') && s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                        let sec_str = &s[0..s.len() - 1];
+                        if let Ok(sec) = sec_str.parse::<i64>() {
+                            if let Some(dt) = DateTime::from_timestamp_millis(Utc::now().timestamp_millis() + sec * 1000) {
+                                reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
                             }
                         }
                     } else {

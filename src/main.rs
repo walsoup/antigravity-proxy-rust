@@ -27,7 +27,7 @@ use antigravity_proxy_rust::config::{get_proxy_config, load_proxy_config, update
 use antigravity_proxy_rust::auth::{
     get_accounts, get_strategy, set_strategy,
     reset_all_cooldowns, remove_account, reset_account, get_project_id,
-    update_account_project, mark_cooldown, purge_system_state, add_account,
+    update_account_project, update_account_priority, mark_cooldown, purge_system_state, add_account,
     generate_verifier, generate_auth_url, exchange_code, get_user_email,
     get_best_account, update_account_usage, flag_account_challenge,
     flag_model_unsupported, get_impersonation_headers_builder, get_gemini_cli_headers_builder,
@@ -143,6 +143,11 @@ async fn main() {
         .route("/v1/models", get(models_handler))
         .route("/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_completions_handler))
+        .route("/api/v1/credits", get(credits_handler))
+        .route("/v1/credits", get(credits_handler))
+        .route("/dashboard/billing/credit_grants", get(credits_handler))
+        .route("/v1/dashboard/billing/credit_grants", get(credits_handler))
+        .route("/v1/dashboard/billing/subscription", get(credits_handler))
         .route("/oauth/start", get(oauth_start_handler))
         .route("/oauth-callback", get(oauth_callback_handler))
         .route("/api/sse", get(api_sse_handler))
@@ -156,6 +161,7 @@ async fn main() {
         .route("/api/accounts/:email/reset", post(api_reset_account_handler))
         .route("/api/accounts/:email/project/rediscover", post(api_rediscover_project_handler))
         .route("/api/accounts/:email/project", post(api_set_project_handler))
+        .route("/api/accounts/:email/priority", post(api_set_priority_handler))
         .route("/api/accounts/:email/cooldown", post(api_set_cooldown_handler))
         // Serve frontend files
         .nest(
@@ -168,12 +174,28 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log_info!("Antigravity Proxy (v{}) running on http://{}", env!("CARGO_PKG_VERSION"), addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            log_err!("Failed to bind to http://{}: Address already in use (port {}). Kill the existing process (e.g. `fuser -k {}/tcp`) or specify a different port (e.g. `PORT=3001`).", addr, port, port);
+            std::process::exit(1);
+        }
+        Err(e) => panic!("Failed to bind to {}: {}", addr, e),
+    };
     axum::serve(listener, app).await.unwrap();
 }
 
 // Authentication Check Helper
 async fn check_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Result<String, (StatusCode, Value)> {
+    let has_pwd = match std::env::var("PROXY_PASSWORD") {
+        Ok(pwd) => !pwd.trim().is_empty(),
+        Err(_) => false,
+    };
+
+    if !has_pwd {
+        return Ok("admin".to_string());
+    }
+
     let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
     let mut token = auth_header.and_then(|h| {
         if h.starts_with("Bearer ") {
@@ -223,22 +245,121 @@ async fn health_handler() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" })).into_response()
 }
 
+async fn credits_handler() -> Response {
+    let mut total_granted = 0.0;
+    let mut total_used = 0.0;
+
+    let all_accounts = get_accounts();
+    let last_family_opt = GLOBAL_LAST_USED_MODEL_FAMILY.read().unwrap().clone();
+
+    if let Some(family) = last_family_opt {
+        for acc in &all_accounts {
+            if let Some(quota_list) = &acc.quota {
+                for q in quota_list {
+                    if get_family_name(&q.group_name) == family {
+                        let limit_val = q.limit.replace(",", "").parse::<f64>().unwrap_or(0.0);
+                        let usage_val = q.usage.replace(",", "").parse::<f64>().unwrap_or(0.0);
+                        if limit_val > 0.0 {
+                            total_granted += limit_val;
+                            total_used += usage_val;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if total_granted == 0.0 {
+        total_used = 0.0;
+        for acc in &all_accounts {
+            if let Some(quota_list) = &acc.quota {
+                for q in quota_list {
+                    let limit_val = q.limit.replace(",", "").parse::<f64>().unwrap_or(0.0);
+                    let usage_val = q.usage.replace(",", "").parse::<f64>().unwrap_or(0.0);
+                    if limit_val > 0.0 {
+                        total_granted += limit_val;
+                        total_used += usage_val;
+                    }
+                }
+            }
+        }
+    }
+
+    if total_granted == 0.0 {
+        total_granted = 100.0;
+    }
+
+    let percentage_used = if total_granted > 0.0 {
+        (total_used / total_granted) * 100.0
+    } else {
+        0.0
+    };
+
+    let body = serde_json::json!({
+        "data": {
+            "total_usage": percentage_used,
+            "total_credits": 100.0
+        },
+        "object": "credit_summary",
+        "total_granted": 100.0,
+        "total_used": percentage_used,
+        "total_available": f64::max(0.0, 100.0 - percentage_used),
+        "has_payment_method": true,
+        "plan": {
+            "title": "Pay-as-you-go"
+        },
+        "grants": {
+            "object": "list",
+            "data": [
+                {
+                    "object": "credit_grant",
+                    "id": "cg_antigravity",
+                    "grant_amount": 100.0,
+                    "used_amount": percentage_used,
+                    "effective_at": 1673740800.0,
+                    "expires_at": 2000000000.0
+                }
+            ]
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        .header("Access-Control-Allow-Headers", "*")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
 async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
     if let Err(e) = check_auth(&headers, &query).await {
         return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
     }
 
     let default_models = vec![
-        "claude-opus-4-6-thinking",
+        "gemini-3.6-flash",
+        "gemini-3.6-flash-high",
+        "gemini-3.6-flash-medium",
+        "gemini-3.6-flash-low",
+        "gemini-3.6-flash-tiered",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-high",
+        "gemini-3-flash",
+        "gemini-3-flash-agent",
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-pro",
+        "gemini-pro-agent",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-2.5-pro",
-        "gemini-3-flash",
-        "gemini-3-flash-agent",
-        "gemini-3.1-pro",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-high",
-        "gemini-pro-agent",
+        "claude-opus-4-6-thinking",
+        "claude-sonnet-4-6",
+        "gpt-oss-120b-medium",
+        "proactive-observer",
+        "m50",
         "antigravity-auto",
     ];
 
@@ -264,6 +385,9 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
     
     if !get_effective_features().expose_variants {
         models_array.retain(|id| {
+            if id == "gpt-oss-120b-medium" || id == "proactive-observer" || id == "m50" {
+                return true;
+            }
             !(id.ends_with("-high") || id.ends_with("-medium") || id.ends_with("-low") || id.ends_with("-extra-low"))
         });
     }
@@ -292,9 +416,9 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
 async fn oauth_start_handler(headers: HeaderMap) -> impl IntoResponse {
     let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("localhost:3000");
     let proto = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok())
-        .unwrap_or(if host.contains("localhost") { "http" } else { "https" });
+        .unwrap_or(if host.contains("localhost") || host.contains("127.0.0.1") { "http" } else { "https" });
 
-    let redirect_uri = format!("{}://{}/oauth-callback", proto, host);
+    let redirect_uri = std::env::var("OAUTH_REDIRECT_URI").unwrap_or_else(|_| format!("{}://{}/oauth-callback", proto, host));
     let verifier = generate_verifier();
     let auth_url = generate_auth_url(&verifier, Some(&redirect_uri));
 
@@ -319,8 +443,8 @@ async fn oauth_callback_handler(
 ) -> impl IntoResponse {
     let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("localhost:3000");
     let proto = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok())
-        .unwrap_or(if host.contains("localhost") { "http" } else { "https" });
-    let redirect_uri = format!("{}://{}/oauth-callback", proto, host);
+        .unwrap_or(if host.contains("localhost") || host.contains("127.0.0.1") { "http" } else { "https" });
+    let redirect_uri = std::env::var("OAUTH_REDIRECT_URI").unwrap_or_else(|_| format!("{}://{}/oauth-callback", proto, host));
 
     let code = match query.get("code") {
         Some(c) => c,
@@ -584,6 +708,22 @@ async fn api_set_project_handler(
     }
     if let Some(pid) = body.get("projectId").and_then(|v| v.as_str()) {
         update_account_project(&email, pid);
+        return StatusCode::OK.into_response();
+    }
+    StatusCode::BAD_REQUEST.into_response()
+}
+
+async fn api_set_priority_handler(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    Path(email): Path<String>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
+        return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
+    }
+    if let Some(priority) = body.get("priority").and_then(|v| v.as_i64()) {
+        update_account_priority(&email, priority as i32);
         return StatusCode::OK.into_response();
     }
     StatusCode::BAD_REQUEST.into_response()
@@ -928,16 +1068,16 @@ async fn handle_chat_completion_internal(
             let delay_ms = std::cmp::min(500 * attempts, 3000);
             tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
 
-            if (!is_claude && !is_gpt) && last_status != 503 {
+            if !is_sandbox_only && last_status != 503 {
                 use_cli_pool = !use_cli_pool;
                 log_info!("[Switch] Pool switch threshold met. Trying pool: {} (attempt {})", if use_cli_pool { "cli" } else { "sandbox" }, attempts);
             } else {
-                log_info!("[Switch] Skipping pool switch for non-fallback model (attempt {})", attempts);
+                log_info!("[Switch] Skipping pool switch for sandbox-only model (attempt {})", attempts);
             }
         }
 
         let mut account = get_best_account(Some(if use_cli_pool { "cli" } else { "sandbox" }), Some(&model_name), Some(&client_id), &tried_emails, true).await;
-        if account.is_none() && (!is_claude && !is_gpt) {
+        if account.is_none() && !is_sandbox_only {
             log_info!("[Manager] No READY accounts in {} pool, trying the other pool first...", if use_cli_pool { "CLI" } else { "Sandbox" });
             let other_pool = if use_cli_pool { "sandbox" } else { "cli" };
             account = get_best_account(Some(other_pool), Some(&model_name), Some(&client_id), &tried_emails, true).await;
@@ -990,7 +1130,7 @@ async fn handle_chat_completion_internal(
         let req_headers = if use_cli_pool && !target_model.contains("claude") {
             get_gemini_cli_headers_builder(acc.access_token.as_deref().unwrap_or(""), &fp)
         } else {
-            get_impersonation_headers_builder(acc.access_token.as_deref().unwrap_or(""), &fp, Some(&target_model), acc.project_id.as_deref())
+            get_impersonation_headers_builder(acc.access_token.as_deref().unwrap_or(""), &fp, Some(&target_model), None)
         };
 
         if !config.logging.disable_request_logging && !config_features.fast_mode {
@@ -1169,7 +1309,7 @@ async fn handle_chat_completion_internal(
                             line_buffer.push_str(&text);
                             while let Some(idx) = line_buffer.find('\n') {
                                 let line = line_buffer[..idx].to_string();
-                                line_buffer = line_buffer[idx + 1..].to_string();
+                                line_buffer.drain(..=idx);
                                 
                                 if line.starts_with("data: ") && line != "data: [DONE]" {
                                     if let Ok(event_json) = serde_json::from_str::<Value>(&line[6..]) {
@@ -1303,7 +1443,7 @@ fn pipe_stream_events(
 
             while let Some(idx) = buffer.find('\n') {
                 let line = buffer[..idx].to_string();
-                buffer = buffer[idx + 1..].to_string();
+                buffer.drain(..=idx);
                 let trimmed = line.trim();
 
                 if trimmed.is_empty() {

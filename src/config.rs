@@ -227,12 +227,12 @@ impl Default for ProxyConfig {
             },
             endpoints: EndpointsConfig {
                 sandbox: vec![
+                    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string(),
                     "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string(),
-                    "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string(),
                 ],
                 cli: vec![
                     "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string(),
-                    "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string(),
+                    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string(),
                 ],
             },
             logging: LoggingConfig {
