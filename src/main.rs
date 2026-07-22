@@ -62,7 +62,7 @@ fn append_log(level: &str, msg: &str) {
 macro_rules! log_info {
     ($($arg:tt)*) => {
         let msg = format!($($arg)*);
-        println!("[INFO] {}", msg);
+        println!("\x1b[1;36m[INFO]\x1b[0m {}", msg);
         append_log("info", &msg);
     }
 }
@@ -71,7 +71,7 @@ macro_rules! log_info {
 macro_rules! log_warn {
     ($($arg:tt)*) => {
         let msg = format!($($arg)*);
-        eprintln!("[WARN] {}", msg);
+        eprintln!("\x1b[1;33m[WARN]\x1b[0m {}", msg);
         append_log("warn", &msg);
     }
 }
@@ -80,7 +80,7 @@ macro_rules! log_warn {
 macro_rules! log_err {
     ($($arg:tt)*) => {
         let msg = format!($($arg)*);
-        eprintln!("[ERROR] {}", msg);
+        eprintln!("\x1b[1;31m[ERROR]\x1b[0m {}", msg);
         append_log("error", &msg);
     }
 }
@@ -172,7 +172,10 @@ async fn main() {
         .layer(cors);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    log_info!("Antigravity Proxy (v{}) running on http://{}", env!("CARGO_PKG_VERSION"), addr);
+    println!("\x1b[1;36m  ┌─────────────────────────────────────────────────────────┐\x1b[0m");
+    println!("\x1b[1;36m  │\x1b[0m  \x1b[1;36m✦ ANTIGRAVITY PROXY\x1b[0m \x1b[90mv{}\x1b[0m                              \x1b[1;36m│\x1b[0m", env!("CARGO_PKG_VERSION"));
+    println!("\x1b[1;36m  │\x1b[0m  \x1b[1;32m●\x1b[0m Listening at \x1b[1;37mhttp://{}\x1b[0m                         \x1b[1;36m│\x1b[0m", addr);
+    println!("\x1b[1;36m  └─────────────────────────────────────────────────────────┘\x1b[0m");
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,

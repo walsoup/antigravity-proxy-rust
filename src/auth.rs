@@ -213,10 +213,10 @@ pub async fn load_accounts_config() -> Result<(), String> {
                 match serde_json::from_str::<Vec<AntigravityAccount>>(&content) {
                     Ok(accounts) => {
                         state.accounts = accounts;
-                        println!("[Manager] Loaded {} accounts from local storage.", state.accounts.length_or_count());
+                        println!("\x1b[1;35m[Manager]\x1b[0m Loaded {} account(s) from local storage.", state.accounts.length_or_count());
                     }
                     Err(e) => {
-                        eprintln!("[Manager] Failed to parse {}: {}", path, e);
+                        eprintln!("\x1b[1;31m[Manager]\x1b[0m Failed to parse {}: {}", path, e);
                     }
                 }
             }

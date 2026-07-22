@@ -334,7 +334,7 @@ pub fn load_proxy_config(path_str: &str) -> ProxyConfig {
             if let Ok(loaded) = serde_json::from_str::<ProxyConfig>(&content) {
                 let mut config_write = CONFIG.write().unwrap();
                 *config_write = loaded.clone();
-                println!("[Config] Loaded configuration: strategy={}", config_write.rotation.strategy);
+                println!("\x1b[1;34m[Config]\x1b[0m Loaded configuration: strategy={}", config_write.rotation.strategy);
                 return loaded;
             }
         }
