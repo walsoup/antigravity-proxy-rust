@@ -901,10 +901,14 @@ async fn handle_chat_completion_internal(
     }
 
     let is_sandbox_only = is_claude || is_gpt ||
+        model_lower.contains("gemini-3.6") ||
+        model_lower.contains("gemini-3.5") ||
         model_lower.contains("gemini-3-flash") ||
-        model_lower.contains("gemini-3.5-flash") ||
+        model_lower.contains("gemini-3.1-flash") ||
         model_lower.contains("gemini-2.") ||
-        model_lower.contains("image");
+        model_lower.contains("image") ||
+        model_lower.contains("proactive-observer") ||
+        model_lower.contains("m50");
 
     let mut use_cli_pool = !is_sandbox_only && (
         model_lower.contains("-preview") ||
@@ -1110,17 +1114,25 @@ async fn handle_chat_completion_internal(
         let cli_endpoints = config.endpoints.cli.clone();
         
         let google_url = if use_cli_pool {
-            let cli_endpoint_idx = if model_lower.contains("claude") { cli_endpoints.len() - 1 } else { std::cmp::min(attempts - 1, cli_endpoints.len() - 1) };
+            let cli_endpoint_idx = if model_lower.contains("claude") {
+                cli_endpoints.len() - 1
+            } else if last_status == 503 {
+                std::cmp::min(attempts - 1, cli_endpoints.len() - 1)
+            } else {
+                0
+            };
             cli_endpoints[cli_endpoint_idx].clone()
         } else {
-            let sandbox_endpoint_idx = std::cmp::min(attempts - 1, sandbox_endpoints.len() - 1);
+            let sandbox_endpoint_idx = if is_sandbox_only || last_status != 503 {
+                0
+            } else {
+                std::cmp::min(attempts - 1, sandbox_endpoints.len() - 1)
+            };
             sandbox_endpoints[sandbox_endpoint_idx].clone()
         };
 
         if last_status == 503 {
             log_info!("[Capacity] Retrying account {} on next endpoint {}...", acc.email, google_url.split('/').nth(2).unwrap_or("unknown"));
-        } else {
-            tried_emails.push(acc.email.clone());
         }
 
         let project_id = acc.project_id.clone().unwrap_or_default();
@@ -1170,7 +1182,8 @@ async fn handle_chat_completion_internal(
                     let parsed_err = parse_google_error(&err_text);
                     last_error_msg = parsed_err.message.clone().unwrap_or_else(|| err_text.clone());
                     
-                    log_warn!("[Error] Google API ({}) returned {} ({}): {}", acc.email, status, parsed_err.reason, err_text);
+                    let display_msg = parsed_err.message.as_deref().unwrap_or_else(|| err_text.trim());
+                    log_warn!("[Error] Google API ({}) returned {} ({}): {}", acc.email, status, parsed_err.reason, display_msg);
 
                     // Write to error log
                     let _ = append_error_log(&acc.email, status, &parsed_err.reason, &err_text, &google_body);
@@ -1178,6 +1191,9 @@ async fn handle_chat_completion_internal(
                     antigravity_proxy_rust::auth::emit_account_flash(&acc.email, "error");
 
                     if status == 403 || status == 404 {
+                        if !tried_emails.contains(&acc.email) {
+                            tried_emails.push(acc.email.clone());
+                        }
                         if parsed_err.is_challenge_required {
                             log_info!("[Auth] Challenge required for {}, flagging challenge.", acc.email);
                             let challenge = serde_json::json!({
@@ -1191,7 +1207,7 @@ async fn handle_chat_completion_internal(
                         } else if parsed_err.is_model_unsupported && !use_cli_pool {
                             let clean_model = model_name.replace("antigravity-", "");
                             let known_models = vec![
-                                "claude-sonnet-4-5", "claude-opus-4-6-thinking", "gemini-3-flash", "gemini-3.1-pro", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash"
+                                "claude-sonnet-4-5", "claude-opus-4-6-thinking", "gemini-3-flash", "gemini-3.1-pro", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.1-flash"
                             ];
                             let is_known = known_models.iter().any(|m| clean_model.starts_with(m)) || clean_model == "gemini-pro-agent";
                             if !is_known {
@@ -1231,7 +1247,9 @@ async fn handle_chat_completion_internal(
                         if cf >= 2 {
                             update_account_usage(&acc.email, false, Some(&model_name), Some(if use_cli_pool { "cli" } else { "sandbox" }), Some(&client_id), Some(429)).await;
                         }
-                        tried_emails.push(acc.email.clone());
+                        if !tried_emails.contains(&acc.email) {
+                            tried_emails.push(acc.email.clone());
+                        }
                         continue;
                     }
 
@@ -1245,6 +1263,9 @@ async fn handle_chat_completion_internal(
 
                     update_account_usage(&acc.email, false, Some(&model_name), Some(if use_cli_pool { "cli" } else { "sandbox" }), Some(&client_id), Some(status)).await;
                     if status == 429 {
+                        if !tried_emails.contains(&acc.email) {
+                            tried_emails.push(acc.email.clone());
+                        }
                         mark_cooldown(&acc.email, if use_cli_pool { "cli" } else { "sandbox" }, &get_family_name(&model_name), None);
                     }
                     continue;

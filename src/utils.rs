@@ -9,9 +9,9 @@ use crate::config::{get_proxy_config, get_effective_features};
 pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .tcp_nodelay(true)
-        .tcp_keepalive(std::time::Duration::from_secs(60))
-        .pool_max_idle_per_host(50)
-        .pool_idle_timeout(std::time::Duration::from_secs(120))
+        .tcp_keepalive(std::time::Duration::from_secs(59))
+        .pool_max_idle_per_host(10)
+        .pool_idle_timeout(std::time::Duration::from_secs(59))
         .build()
         .unwrap_or_default()
 });
@@ -583,7 +583,7 @@ pub fn transform_to_google_body(
             google_model = "gemini-3.1-flash-lite".to_string();
         } else if raw_model.contains("gpt-oss-120b") || base_model.contains("gpt-oss-120b") {
             google_model = "gpt-oss-120b-medium".to_string();
-        } else if base_model.contains("gemini-3.6-flash") {
+        } else if base_model.contains("gemini-3.6") {
             let tier = adaptive_tier.as_deref().unwrap_or("high");
             if tier == "low" {
                 google_model = "gemini-3.6-flash-low".to_string();

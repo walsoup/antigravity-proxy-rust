@@ -1,4 +1,4 @@
-use antigravity_proxy_rust::utils::{detect_loop, clean_json_schema_for_antigravity, parse_google_error};
+use antigravity_proxy_rust::utils::{detect_loop, clean_json_schema_for_antigravity, parse_google_error, transform_to_google_body};
 use serde_json::json;
 
 #[test]
@@ -61,4 +61,24 @@ fn test_parse_google_error_captcha() {
     let parsed = parse_google_error(error_text);
     assert!(parsed.is_challenge_required);
     assert_eq!(parsed.validation_url, Some("https://google.com/challenge".to_string()));
+}
+
+#[test]
+fn test_gemini_3_6_model_transformation() {
+    let req = json!({
+        "model": "gemini-3.6-flash-high",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+
+    let transformed = transform_to_google_body(&req, "test-proj", false, None, false);
+    assert_eq!(transformed.get("model").unwrap().as_str().unwrap(), "gemini-3.6-flash-high");
+
+    let req_medium = json!({
+        "model": "gemini-3.6-flash",
+        "reasoning_effort": "medium",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+
+    let transformed_med = transform_to_google_body(&req_medium, "test-proj", false, None, false);
+    assert_eq!(transformed_med.get("model").unwrap().as_str().unwrap(), "gemini-3.6-flash-medium");
 }
