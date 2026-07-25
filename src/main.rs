@@ -39,7 +39,9 @@ use antigravity_proxy_rust::utils::{
     transform_to_google_body, transform_google_event_to_openai, detect_loop,
     parse_google_error, get_exact_cache, cache_signature,
     StreamState, hash_string, generate_uuid_v4, generate_random_hex_8,
+    normalize_model_name, convert_anthropic_body_to_openai, convert_openai_response_to_anthropic,
 };
+
 
 static LOG_BUFFER: Lazy<RwLock<Vec<String>>> = Lazy::new(|| RwLock::new(Vec::new()));
 
@@ -143,6 +145,15 @@ async fn main() {
         .route("/v1/models", get(models_handler))
         .route("/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_completions_handler))
+        .route("/chat/completions", post(chat_completions_handler))
+        .route("/v1/messages", post(anthropic_messages_handler))
+        .route("/messages", post(anthropic_messages_handler))
+        .route("/v1/v1/messages", post(anthropic_messages_handler))
+        .route("/v1/messages/count_tokens", post(anthropic_count_tokens_handler))
+        .route("/messages/count_tokens", post(anthropic_count_tokens_handler))
+        .route("/v1/v1/messages/count_tokens", post(anthropic_count_tokens_handler))
+
+
         .route("/api/v1/credits", get(credits_handler))
         .route("/v1/credits", get(credits_handler))
         .route("/dashboard/billing/credit_grants", get(credits_handler))
@@ -190,12 +201,24 @@ async fn main() {
 
 // Authentication Check Helper
 async fn check_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Result<String, (StatusCode, Value)> {
-    let has_pwd = match std::env::var("PROXY_PASSWORD") {
-        Ok(pwd) => !pwd.trim().is_empty(),
-        Err(_) => false,
+    let proxy_config = get_proxy_config();
+    let env_pwd = std::env::var("PROXY_PASSWORD")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let config_pwd = if !proxy_config.security.password.trim().is_empty() {
+        Some(proxy_config.security.password.clone())
+    } else {
+        None
     };
 
-    if !has_pwd {
+    let required_password = env_pwd.or(config_pwd);
+    if required_password.is_none() {
+        return Ok("admin".to_string());
+    }
+
+    let pwd = required_password.unwrap();
+    let pwd_trim = pwd.trim();
+    if pwd_trim.is_empty() || pwd_trim == "your_password" {
         return Ok("admin".to_string());
     }
 
@@ -207,6 +230,10 @@ async fn check_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Res
             Some(h.to_string())
         }
     });
+
+    if token.is_none() {
+        token = headers.get("x-api-key").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+    }
 
     if token.is_none() {
         token = headers.get("X-Proxy-Password").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
@@ -226,10 +253,8 @@ async fn check_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Res
         }
     };
 
-    if let Ok(pwd) = std::env::var("PROXY_PASSWORD") {
-        if token == pwd {
-            return Ok("admin".to_string());
-        }
+    if token == pwd_trim || token.contains(pwd_trim) {
+        return Ok("admin".to_string());
     }
 
     Err((
@@ -237,6 +262,7 @@ async fn check_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Res
         serde_json::json!({ "error": "Unauthorized: Invalid API key" }),
     ))
 }
+
 
 async fn check_admin_auth(headers: &HeaderMap, query: &HashMap<String, String>) -> Result<(), (StatusCode, Value)> {
     check_auth(headers, query).await.map(|_| ())
@@ -774,6 +800,301 @@ async fn chat_completions_handler(
     }
 }
 
+// --- Anthropic Messages API Handler ---
+
+async fn anthropic_messages_handler(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    Json(anth_body): Json<Value>,
+) -> impl IntoResponse {
+    let user_email = match check_auth(&headers, &query).await {
+        Ok(email) => email,
+        Err(e) => {
+            return Response::builder()
+                .status(e.0)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({
+                    "type": "error",
+                    "error": { "type": "authentication_error", "message": e.1 }
+                }).to_string()))
+                .unwrap()
+                .into_response();
+        }
+    };
+
+    let is_streaming = anth_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let original_model = anth_body.get("model").and_then(|v| v.as_str()).unwrap_or("antigravity-auto").to_string();
+
+    let mut openai_body = convert_anthropic_body_to_openai(anth_body);
+    let normalized = normalize_model_name(&original_model);
+    openai_body.as_object_mut().unwrap().insert("model".to_string(), Value::String(normalized));
+
+    if !is_streaming {
+        match handle_chat_completion_internal(headers, query, openai_body, Some(user_email)).await {
+            Ok(res) => {
+                let (parts, body) = res.into_parts();
+                let bytes = match axum::body::to_bytes(body, usize::MAX).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(serde_json::json!({
+                                "type": "error",
+                                "error": { "type": "api_error", "message": e.to_string() }
+                            }).to_string()))
+                            .unwrap()
+                            .into_response();
+                    }
+                };
+
+                let openai_res: Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
+                let anth_res = convert_openai_response_to_anthropic(openai_res, &original_model);
+
+                Response::builder()
+                    .status(parts.status)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(anth_res.to_string()))
+                    .unwrap()
+                    .into_response()
+            }
+            Err((status, msg)) => Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({
+                    "type": "error",
+                    "error": { "type": "api_error", "message": msg }
+                }).to_string()))
+                .unwrap()
+                .into_response(),
+        }
+    } else {
+        match handle_chat_completion_internal(headers, query, openai_body, Some(user_email)).await {
+            Ok(res) => {
+                let (_parts, body) = res.into_parts();
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(100);
+                let model_name = original_model.clone();
+
+                tokio::spawn(async move {
+                    let mut data_stream = body.into_data_stream();
+                    let mut buffer = String::new();
+
+                    let msg_id = format!("msg_{}", generate_random_hex_8());
+                    let mut message_started = false;
+                    let mut content_block_started = false;
+                    let mut current_block_index: u32 = 0;
+                    let mut stop_reason = "end_turn";
+
+                    while let Some(chunk_result) = data_stream.next().await {
+                        let bytes = match chunk_result {
+                            Ok(b) => b,
+                            Err(_) => break,
+                        };
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                        while let Some(pos) = buffer.find('\n') {
+                            let line = buffer[..pos].trim().to_string();
+                            buffer = buffer[pos + 1..].to_string();
+
+                            if line.is_empty() || line.starts_with(':') {
+                                continue;
+                            }
+
+                            if line.starts_with("data: ") {
+                                let data_str = line["data: ".len()..].trim();
+
+                                if data_str == "[DONE]" {
+                                    if content_block_started {
+                                        let _ = tx.send(Ok(Event::default().event("content_block_stop").data(
+                                            serde_json::json!({
+                                                "type": "content_block_stop",
+                                                "index": current_block_index
+                                            }).to_string()
+                                        ))).await;
+                                        content_block_started = false;
+                                    }
+                                    let _ = tx.send(Ok(Event::default().event("message_delta").data(
+                                        serde_json::json!({
+                                            "type": "message_delta",
+                                            "delta": { "stop_reason": stop_reason, "stop_sequence": null },
+                                            "usage": { "output_tokens": 0 }
+                                        }).to_string()
+                                    ))).await;
+                                    let _ = tx.send(Ok(Event::default().event("message_stop").data(
+                                        serde_json::json!({ "type": "message_stop" }).to_string()
+                                    ))).await;
+                                    break;
+                                }
+
+                                if let Ok(json) = serde_json::from_str::<Value>(data_str) {
+                                    if !message_started {
+                                        message_started = true;
+                                        let _ = tx.send(Ok(Event::default().event("message_start").data(
+                                            serde_json::json!({
+                                                "type": "message_start",
+                                                "message": {
+                                                    "id": msg_id.clone(),
+                                                    "type": "message",
+                                                    "role": "assistant",
+                                                    "content": [],
+                                                    "model": model_name.clone(),
+                                                    "stop_reason": null,
+                                                    "stop_sequence": null,
+                                                    "usage": { "input_tokens": 0, "output_tokens": 0 }
+                                                }
+                                            }).to_string()
+                                        ))).await;
+                                    }
+
+                                    if let Some(choice) = json.get("choices").and_then(|c| c.get(0)) {
+                                        if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
+                                            if reason == "tool_calls" {
+                                                stop_reason = "tool_use";
+                                            }
+                                        }
+
+                                        if let Some(delta) = choice.get("delta") {
+                                            if let Some(txt) = delta.get("content").and_then(|c| c.as_str()) {
+                                                if !txt.is_empty() {
+                                                    if !content_block_started {
+                                                        content_block_started = true;
+                                                        let _ = tx.send(Ok(Event::default().event("content_block_start").data(
+                                                            serde_json::json!({
+                                                                "type": "content_block_start",
+                                                                "index": current_block_index,
+                                                                "content_block": { "type": "text", "text": "" }
+                                                            }).to_string()
+                                                        ))).await;
+                                                    }
+                                                    let _ = tx.send(Ok(Event::default().event("content_block_delta").data(
+                                                        serde_json::json!({
+                                                            "type": "content_block_delta",
+                                                            "index": current_block_index,
+                                                            "delta": { "type": "text_delta", "text": txt }
+                                                        }).to_string()
+                                                    ))).await;
+                                                }
+                                            }
+
+                                            if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                                for tc in tool_calls {
+                                                    let func = tc.get("function");
+                                                    let tc_id = tc.get("id").and_then(|i| i.as_str());
+                                                    let name = func.and_then(|f| f.get("name")).and_then(|n| n.as_str());
+                                                    let args = func.and_then(|f| f.get("arguments")).and_then(|a| a.as_str());
+
+                                                    if let (Some(id), Some(n)) = (tc_id, name) {
+                                                        if content_block_started {
+                                                            let _ = tx.send(Ok(Event::default().event("content_block_stop").data(
+                                                                serde_json::json!({
+                                                                    "type": "content_block_stop",
+                                                                    "index": current_block_index
+                                                                }).to_string()
+                                                            ))).await;
+                                                            current_block_index += 1;
+                                                        }
+                                                        content_block_started = true;
+                                                        let _ = tx.send(Ok(Event::default().event("content_block_start").data(
+                                                            serde_json::json!({
+                                                                "type": "content_block_start",
+                                                                "index": current_block_index,
+                                                                "content_block": {
+                                                                    "type": "tool_use",
+                                                                    "id": id,
+                                                                    "name": n,
+                                                                    "input": {}
+                                                                }
+                                                            }).to_string()
+                                                        ))).await;
+                                                    }
+
+                                                    if let Some(arg_str) = args {
+                                                        if !arg_str.is_empty() {
+                                                            let _ = tx.send(Ok(Event::default().event("content_block_delta").data(
+                                                                serde_json::json!({
+                                                                    "type": "content_block_delta",
+                                                                    "index": current_block_index,
+                                                                    "delta": { "type": "input_json_delta", "partial_json": arg_str }
+                                                                }).to_string()
+                                                            ))).await;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if content_block_started {
+                        let _ = tx.send(Ok(Event::default().event("content_block_stop").data(
+                            serde_json::json!({
+                                "type": "content_block_stop",
+                                "index": current_block_index
+                            }).to_string()
+                        ))).await;
+                    }
+                    if message_started {
+                        let _ = tx.send(Ok(Event::default().event("message_delta").data(
+                            serde_json::json!({
+                                "type": "message_delta",
+                                "delta": { "stop_reason": stop_reason, "stop_sequence": null },
+                                "usage": { "output_tokens": 0 }
+                            }).to_string()
+                        ))).await;
+                        let _ = tx.send(Ok(Event::default().event("message_stop").data(
+                            serde_json::json!({ "type": "message_stop" }).to_string()
+                        ))).await;
+                    }
+                });
+
+                let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+                Sse::new(stream).into_response()
+            }
+            Err((status, msg)) => Response::builder()
+                .status(status)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({
+                    "type": "error",
+                    "error": { "type": "api_error", "message": msg }
+                }).to_string()))
+                .unwrap()
+                .into_response(),
+        }
+    }
+}
+
+async fn anthropic_count_tokens_handler(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    Json(_body): Json<Value>,
+) -> impl IntoResponse {
+    if let Err(e) = check_auth(&headers, &query).await {
+        return Response::builder()
+            .status(e.0)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "type": "error",
+                "error": { "type": "authentication_error", "message": e.1 }
+            }).to_string()))
+            .unwrap()
+            .into_response();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({
+            "input_tokens": 100
+        }).to_string()))
+        .unwrap()
+        .into_response()
+}
+
+
+
 async fn handle_chat_completion_internal(
     headers: HeaderMap,
     _query: HashMap<String, String>,
@@ -1165,12 +1486,20 @@ async fn handle_chat_completion_internal(
             tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
-        let client_res = antigravity_proxy_rust::utils::HTTP_CLIENT.post(&google_url)
+        let client_req = antigravity_proxy_rust::utils::HTTP_CLIENT.post(&google_url)
             .headers(req_headers)
-            .json(&google_body)
-            .timeout(Duration::from_millis(timeout_ms))
-            .send()
-            .await;
+            .json(&google_body);
+
+        let client_res = match tokio::time::timeout(Duration::from_millis(timeout_ms), client_req.send()).await {
+            Ok(res) => res,
+            Err(_) => {
+                log_warn!("[Fetch Timeout] Account {} timed out after {}ms connecting to Google API", acc.email, timeout_ms);
+                last_error_msg = format!("Connection timed out after {}ms", timeout_ms);
+                last_status = 504;
+                update_account_usage(&acc.email, false, Some(&model_name), Some(if use_cli_pool { "cli" } else { "sandbox" }), Some(&client_id), Some(504)).await;
+                continue;
+            }
+        };
 
         match client_res {
             Ok(google_res) => {
@@ -1460,8 +1789,41 @@ fn pipe_stream_events(
 
         let config_features = get_effective_features();
 
-        while let Some(chunk_res) = stream.next().await {
-            let chunk = chunk_res.map_err(|e| e.to_string())?;
+        let stream_idle_timeout = Duration::from_secs(120);
+        loop {
+            let chunk_opt = match tokio::time::timeout(stream_idle_timeout, stream.next()).await {
+                Ok(opt) => opt,
+                Err(_) => {
+                    log_warn!("[Stream Timeout] Stream idle timeout ({}s) exceeded for model {}", stream_idle_timeout.as_secs(), model);
+                    if received_content || finish_event_line.is_some() {
+                        if let Some(f_line) = finish_event_line.as_ref() {
+                            let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
+                        }
+                        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                        return Ok(());
+                    }
+                    return Err("Stream idle timeout exceeded (120s)".to_string());
+                }
+            };
+
+            let chunk_res = match chunk_opt {
+                Some(res) => res,
+                None => break, // Clean EOF
+            };
+
+            let chunk = match chunk_res {
+                Ok(c) => c,
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if finish_event_line.is_some() {
+                        log_info!("[Stream EOF] Upstream stream ended after completion: {}", err_msg);
+                        break;
+                    }
+                    log_err!("[Stream Error] Error decoding stream chunk for model {}: {}", model, err_msg);
+                    return Err(err_msg);
+                }
+            };
+
             let text = String::from_utf8_lossy(&chunk);
             buffer.push_str(&text);
 

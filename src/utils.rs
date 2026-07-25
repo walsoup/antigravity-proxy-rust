@@ -1526,3 +1526,225 @@ pub fn detect_loop(text: &str) -> bool {
     }
     false
 }
+
+// --- Anthropic API Translation Helpers ---
+
+pub fn normalize_model_name(model: &str) -> String {
+    let lower = model.to_lowercase();
+    if lower.contains("claude-3") || lower.contains("claude-3-5") || lower.contains("claude-3-7") {
+        "claude-sonnet-4-6".to_string()
+    } else {
+        model.to_string()
+    }
+}
+
+pub fn convert_anthropic_body_to_openai(anth_body: Value) -> Value {
+    let mut openai_messages: Vec<Value> = Vec::new();
+
+    if let Some(system_val) = anth_body.get("system") {
+        let system_text = if let Some(s) = system_val.as_str() {
+            s.to_string()
+        } else if let Some(arr) = system_val.as_array() {
+            arr.iter()
+                .filter_map(|b| {
+                    if b.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        b.get("text").and_then(|t| t.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            "".to_string()
+        };
+
+        if !system_text.is_empty() {
+            openai_messages.push(serde_json::json!({
+                "role": "system",
+                "content": system_text
+            }));
+        }
+    }
+
+    if let Some(messages_arr) = anth_body.get("messages").and_then(|m| m.as_array()) {
+        for msg in messages_arr {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+            let content = msg.get("content");
+
+            if let Some(content_str) = content.and_then(|c| c.as_str()) {
+                openai_messages.push(serde_json::json!({
+                    "role": role,
+                    "content": content_str
+                }));
+            } else if let Some(blocks) = content.and_then(|c| c.as_array()) {
+                let mut text_parts: Vec<String> = Vec::new();
+                let mut tool_calls: Vec<Value> = Vec::new();
+                let mut tool_results: Vec<Value> = Vec::new();
+
+                for block in blocks {
+                    let b_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match b_type {
+                        "text" => {
+                            if let Some(txt) = block.get("text").and_then(|t| t.as_str()) {
+                                text_parts.push(txt.to_string());
+                            }
+                        }
+                        "tool_use" => {
+                            let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                            let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                            let input = block.get("input").cloned().unwrap_or(serde_json::json!({}));
+                            tool_calls.push(serde_json::json!({
+                                "id": id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": input.to_string()
+                                }
+                            }));
+                        }
+                        "tool_result" => {
+                            let tool_use_id = block.get("tool_use_id").and_then(|i| i.as_str()).unwrap_or("");
+                            let res_content = if let Some(c_str) = block.get("content").and_then(|c| c.as_str()) {
+                                c_str.to_string()
+                            } else if let Some(c_arr) = block.get("content").and_then(|c| c.as_array()) {
+                                c_arr.iter()
+                                    .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            } else {
+                                block.get("content").map(|c| c.to_string()).unwrap_or_default()
+                            };
+                            tool_results.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": tool_use_id,
+                                "content": res_content
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !tool_results.is_empty() {
+                    for tr in tool_results {
+                        openai_messages.push(tr);
+                    }
+                } else if !tool_calls.is_empty() {
+                    let text_content = if text_parts.is_empty() { Value::Null } else { Value::String(text_parts.join("\n")) };
+                    openai_messages.push(serde_json::json!({
+                        "role": role,
+                        "content": text_content,
+                        "tool_calls": tool_calls
+                    }));
+                } else if !text_parts.is_empty() {
+                    openai_messages.push(serde_json::json!({
+                        "role": role,
+                        "content": text_parts.join("\n")
+                    }));
+                }
+            }
+        }
+    }
+
+    let mut openai_tools: Vec<Value> = Vec::new();
+    if let Some(tools_arr) = anth_body.get("tools").and_then(|t| t.as_array()) {
+        for tool in tools_arr {
+            let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let description = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
+            let input_schema = tool.get("input_schema").cloned().unwrap_or(serde_json::json!({ "type": "object" }));
+
+            openai_tools.push(serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": input_schema
+                }
+            }));
+        }
+    }
+
+    let model = anth_body.get("model").and_then(|m| m.as_str()).unwrap_or("antigravity-auto").to_string();
+    let stream = anth_body.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+
+    let mut openai_body = serde_json::json!({
+        "model": model,
+        "messages": openai_messages,
+        "stream": stream
+    });
+
+    if !openai_tools.is_empty() {
+        openai_body.as_object_mut().unwrap().insert("tools".to_string(), Value::Array(openai_tools));
+    }
+    if let Some(max_t) = anth_body.get("max_tokens") {
+        openai_body.as_object_mut().unwrap().insert("max_tokens".to_string(), max_t.clone());
+    }
+    if let Some(temp) = anth_body.get("temperature") {
+        openai_body.as_object_mut().unwrap().insert("temperature".to_string(), temp.clone());
+    }
+
+    openai_body
+}
+
+pub fn convert_openai_response_to_anthropic(openai_res: Value, model_name: &str) -> Value {
+    let msg_id = format!("msg_{}", generate_random_hex_8());
+    let mut content_blocks: Vec<Value> = Vec::new();
+    let mut stop_reason = "end_turn";
+
+    if let Some(choice) = openai_res.get("choices").and_then(|c| c.get(0)) {
+        if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
+            if reason == "tool_calls" {
+                stop_reason = "tool_use";
+            }
+        }
+
+        if let Some(msg) = choice.get("message") {
+            if let Some(txt) = msg.get("content").and_then(|c| c.as_str()) {
+                if !txt.is_empty() {
+                    content_blocks.push(serde_json::json!({
+                        "type": "text",
+                        "text": txt
+                    }));
+                }
+            }
+
+            if let Some(tool_calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+                for tc in tool_calls {
+                    let id = tc.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                    let name = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+                    let args_str = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or("{}");
+                    let input_val: Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+
+                    content_blocks.push(serde_json::json!({
+                        "type": "tool_use",
+                        "id": id,
+                        "name": name,
+                        "input": input_val
+                    }));
+                }
+            }
+        }
+    }
+
+    if content_blocks.is_empty() {
+        content_blocks.push(serde_json::json!({
+            "type": "text",
+            "text": ""
+        }));
+    }
+
+    serde_json::json!({
+        "id": msg_id,
+        "type": "message",
+        "role": "assistant",
+        "model": model_name,
+        "content": content_blocks,
+        "stop_reason": stop_reason,
+        "stop_sequence": null,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50
+        }
+    })
+}
+

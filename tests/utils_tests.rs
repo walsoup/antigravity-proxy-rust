@@ -1,4 +1,4 @@
-use antigravity_proxy_rust::utils::{detect_loop, clean_json_schema_for_antigravity, parse_google_error, transform_to_google_body};
+use antigravity_proxy_rust::utils::{detect_loop, clean_json_schema_for_antigravity, parse_google_error, transform_to_google_body, convert_openai_response_to_anthropic};
 use serde_json::json;
 
 #[test]
@@ -81,4 +81,22 @@ fn test_gemini_3_6_model_transformation() {
 
     let transformed_med = transform_to_google_body(&req_medium, "test-proj", false, None, false);
     assert_eq!(transformed_med.get("model").unwrap().as_str().unwrap(), "gemini-3.6-flash-medium");
+}
+
+#[test]
+fn test_convert_openai_response_to_anthropic_empty_content() {
+    let empty_res = json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": ""
+            },
+            "finish_reason": "stop"
+        }]
+    });
+
+    let anth_res = convert_openai_response_to_anthropic(empty_res, "claude-3-5-sonnet");
+    let content = anth_res.get("content").unwrap().as_array().unwrap();
+    assert!(!content.is_empty(), "Anthropic content array must not be empty");
+    assert_eq!(content[0].get("type").unwrap().as_str().unwrap(), "text");
 }

@@ -19,6 +19,7 @@ pub struct ProxyConfig {
     pub features: FeaturesConfig,
     pub scheduling: SchedulingConfig,
     pub alerting: AlertingConfig,
+    pub security: SecurityConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -170,6 +171,12 @@ pub struct AlertingConfig {
     pub notify_on_full_cooldown: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SecurityConfig {
+    pub password: String,
+}
+
 impl Default for ProxyConfig {
     fn default() -> Self {
         let mut timeouts = HashMap::new();
@@ -276,6 +283,9 @@ impl Default for ProxyConfig {
                 health_threshold: 30,
                 notify_on_full_cooldown: true,
             },
+            security: SecurityConfig {
+                password: "".to_string(),
+            },
         }
     }
 }
@@ -298,6 +308,7 @@ impl Default for LoggingConfig { fn default() -> Self { ProxyConfig::default().l
 impl Default for FeaturesConfig { fn default() -> Self { ProxyConfig::default().features } }
 impl Default for SchedulingConfig { fn default() -> Self { ProxyConfig::default().scheduling } }
 impl Default for AlertingConfig { fn default() -> Self { ProxyConfig::default().alerting } }
+impl Default for SecurityConfig { fn default() -> Self { ProxyConfig::default().security } }
 
 static CONFIG: Lazy<RwLock<ProxyConfig>> = Lazy::new(|| RwLock::new(ProxyConfig::default()));
 
