@@ -2,6 +2,40 @@ use antigravity_proxy_rust::utils::transform_to_google_body;
 use serde_json::json;
 
 #[test]
+fn test_gemini_3_7_flash_model_resolution() {
+    let openai_body = json!({
+        "model": "gemini-3.7-flash",
+        "messages": [{ "role": "user", "content": "Hello" }]
+    });
+
+    let google_req = transform_to_google_body(&openai_body, "test-project", false, None, false);
+    assert_eq!(google_req["model"], "gemini-3.7-flash-tiered");
+}
+
+#[test]
+fn test_gemini_3_7_flash_high_resolution() {
+    let openai_body = json!({
+        "model": "gemini-3.7-flash-high",
+        "messages": [{ "role": "user", "content": "Hello" }]
+    });
+
+    let google_req = transform_to_google_body(&openai_body, "test-project", false, None, false);
+    assert_eq!(google_req["model"], "gemini-3.7-flash-tiered");
+    assert_eq!(google_req["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], "high");
+}
+
+#[test]
+fn test_gemini_3_7_flash_tiered_resolution() {
+    let openai_body = json!({
+        "model": "gemini-3.7-flash-tiered",
+        "messages": [{ "role": "user", "content": "Hello" }]
+    });
+
+    let google_req = transform_to_google_body(&openai_body, "test-project", false, None, false);
+    assert_eq!(google_req["model"], "gemini-3.7-flash-tiered");
+}
+
+#[test]
 fn test_gemini_3_6_flash_model_resolution() {
     let openai_body = json!({
         "model": "gemini-3.6-flash",

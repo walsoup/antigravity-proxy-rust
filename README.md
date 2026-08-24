@@ -74,6 +74,11 @@ The proxy exposes OpenAI-compatible models via `/v1/models`. Below is the comple
 
 ### 🌟 Auto-Routing & Default Models
 *   `antigravity-auto` - Dynamic smart router (autonomously selects optimal model based on query complexity)
+*   `gemini-3.7-flash` - Gemini 3.7 Flash (Standard)
+*   `gemini-3.7-flash-high` - Gemini 3.7 Flash (High Tier)
+*   `gemini-3.7-flash-medium` - Gemini 3.7 Flash (Medium Tier)
+*   `gemini-3.7-flash-low` - Gemini 3.7 Flash (Low Tier)
+*   `gemini-3.7-flash-tiered` - Gemini 3.7 Flash (Adaptive Tiered)
 *   `gemini-3.6-flash` - Gemini 3.6 Flash (Standard)
 *   `gemini-3.6-flash-high` - Gemini 3.6 Flash (High Tier)
 *   `gemini-3.6-flash-medium` - Gemini 3.6 Flash (Medium Tier)

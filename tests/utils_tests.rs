@@ -100,3 +100,134 @@ fn test_convert_openai_response_to_anthropic_empty_content() {
     assert!(!content.is_empty(), "Anthropic content array must not be empty");
     assert_eq!(content[0].get("type").unwrap().as_str().unwrap(), "text");
 }
+
+#[test]
+fn test_parse_google_error_model_turn_not_supported() {
+    let error_text = r#"{
+        "error": {
+            "code": 400,
+            "message": "Requests ending with a model turn are not supported.",
+            "status": "INVALID_ARGUMENT"
+        }
+    }"#;
+
+    let parsed = parse_google_error(error_text);
+    assert!(!parsed.is_model_unsupported, "Should not flag model as unsupported");
+    assert_eq!(parsed.status, 400);
+    assert_eq!(parsed.reason, "invalid_argument");
+}
+
+#[test]
+fn test_transform_to_google_body_ending_with_model_turn() {
+    let req = json!({
+        "model": "gemini-3.7-flash",
+        "messages": [
+            { "role": "user", "content": "Hello" },
+            { "role": "assistant", "content": "I am thinking about..." }
+        ]
+    });
+
+    let transformed = transform_to_google_body(&req, "test-proj", false, None, false);
+    let contents = transformed["request"]["contents"].as_array().unwrap();
+    assert!(contents.len() >= 3);
+    assert_eq!(contents.first().unwrap()["role"], "user");
+    assert_eq!(contents.last().unwrap()["role"], "user");
+    assert_eq!(contents.last().unwrap()["parts"][0]["text"], "Continue");
+}
+
+#[test]
+fn test_transform_to_google_body_only_assistant_turn() {
+    let req = json!({
+        "model": "gemini-3.7-flash",
+        "messages": [
+            { "role": "assistant", "content": "Here is what I have so far" }
+        ]
+    });
+
+    let transformed = transform_to_google_body(&req, "test-proj", false, None, false);
+    let contents = transformed["request"]["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 3);
+    assert_eq!(contents[0]["role"], "user");
+    assert_eq!(contents[1]["role"], "model");
+    assert_eq!(contents[2]["role"], "user");
+    assert_eq!(contents[2]["parts"][0]["text"], "Continue");
+}
+
+#[test]
+fn test_transform_to_google_body_function_call_has_thought_signature() {
+    let req = json!({
+        "model": "gemini-3.7-flash",
+        "messages": [
+            { "role": "user", "content": "Please read the file." },
+            {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                    {
+                        "id": "call_12345",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": "{\"path\":\"foo.txt\"}"
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_12345",
+                "name": "read",
+                "content": "file contents"
+            }
+        ]
+    });
+
+    let transformed = transform_to_google_body(&req, "test-proj", false, None, false);
+    let contents = transformed["request"]["contents"].as_array().unwrap();
+    
+    // Find the model message with the functionCall
+    let model_msg = contents.iter().find(|m| m["role"] == "model").expect("Model message should exist");
+    let parts = model_msg["parts"].as_array().expect("Parts should be array");
+    let func_part = parts.iter().find(|p| p.get("functionCall").is_some()).expect("functionCall part should exist");
+    
+    assert!(func_part.get("thoughtSignature").is_some(), "thoughtSignature must be present on functionCall part");
+    assert!(func_part.get("thought_signature").is_some(), "thought_signature must be present on functionCall part");
+    assert_eq!(func_part["thoughtSignature"], "skip_thought_signature_validator");
+    assert_eq!(func_part["thought_signature"], "skip_thought_signature_validator");
+}
+
+#[test]
+fn test_transform_to_google_body_function_call_with_sig_id() {
+    let req = json!({
+        "model": "gemini-3.7-flash",
+        "messages": [
+            { "role": "user", "content": "Run tool" },
+            {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                    {
+                        "id": "sig-my_secret_token_123-call_abc456",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": "{\"path\":\"foo.txt\"}"
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    let transformed = transform_to_google_body(&req, "test-proj", false, None, false);
+    let contents = transformed["request"]["contents"].as_array().unwrap();
+    
+    let model_msg = contents.iter().find(|m| m["role"] == "model").expect("Model message should exist");
+    let parts = model_msg["parts"].as_array().expect("Parts should be array");
+    let func_part = parts.iter().find(|p| p.get("functionCall").is_some()).expect("functionCall part should exist");
+    
+    assert_eq!(func_part["thoughtSignature"], "my_secret_token_123");
+    assert_eq!(func_part["thought_signature"], "my_secret_token_123");
+}
+
+

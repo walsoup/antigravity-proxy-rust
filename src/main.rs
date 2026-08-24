@@ -37,7 +37,7 @@ use antigravity_proxy_rust::auth::{
 use antigravity_proxy_rust::quota::{fetch_quota, refresh_all_quotas, SUPPORTED_MODELS_CACHE};
 use antigravity_proxy_rust::utils::{
     transform_to_google_body, transform_google_event_to_openai, detect_loop,
-    parse_google_error, get_exact_cache, cache_signature,
+    parse_google_error, get_exact_cache, cache_signature, cache_call_id_signature,
     StreamState, hash_string, generate_uuid_v4, generate_random_hex_8,
     normalize_model_name, convert_anthropic_body_to_openai, convert_openai_response_to_anthropic,
 };
@@ -368,6 +368,11 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
     }
 
     let default_models = vec![
+        "gemini-3.7-flash",
+        "gemini-3.7-flash-high",
+        "gemini-3.7-flash-medium",
+        "gemini-3.7-flash-low",
+        "gemini-3.7-flash-tiered",
         "gemini-3.6-flash",
         "gemini-3.6-flash-high",
         "gemini-3.6-flash-medium",
@@ -424,11 +429,57 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
     models_array.sort();
 
     let list: Vec<Value> = models_array.into_iter().map(|id| {
+        let lower = id.to_lowercase();
+        let is_claude = lower.contains("claude");
+        let is_gpt = lower.contains("gpt-oss");
+        let is_tab = lower.contains("tab_") || lower.contains("chat_");
+
+        let supports_thinking = is_claude || is_gpt ||
+            lower.contains("thinking") ||
+            lower.contains("gemini-3") ||
+            lower.contains("gemini-2.5-pro") ||
+            lower.contains("agent") ||
+            lower == "antigravity-auto";
+
+        let supports_vision = !is_gpt && !is_tab && !lower.contains("chat_");
+
+        let (context_window, max_output) = if is_claude {
+            (250_000, 64_000)
+        } else if is_gpt {
+            (131_072, 32_768)
+        } else if is_tab {
+            (16_384, 4_096)
+        } else {
+            (1_048_576, 65_536)
+        };
+
+        let modalities = if supports_vision {
+            serde_json::json!({
+                "input": ["text", "image"],
+                "output": ["text"]
+            })
+        } else {
+            serde_json::json!({
+                "input": ["text"],
+                "output": ["text"]
+            })
+        };
+
         serde_json::json!({
             "id": id,
             "object": "model",
-            "created": chrono::Utc::now().timestamp(),
-            "owned_by": "antigravity"
+            "created": 1786824209,
+            "owned_by": "antigravity",
+            "context_window": context_window,
+            "max_context_tokens": context_window,
+            "max_tokens": context_window,
+            "max_output_tokens": max_output,
+            "supports_thinking": supports_thinking,
+            "reasoning": supports_thinking,
+            "supports_vision": supports_vision,
+            "supports_images": supports_vision,
+            "modalities": modalities,
+            "permission": []
         })
     }).collect();
 
@@ -923,6 +974,7 @@ async fn anthropic_messages_handler(
                                     let _ = tx.send(Ok(Event::default().event("message_stop").data(
                                         serde_json::json!({ "type": "message_stop" }).to_string()
                                     ))).await;
+                                    message_started = false;
                                     break;
                                 }
 
@@ -1222,6 +1274,7 @@ async fn handle_chat_completion_internal(
     }
 
     let is_sandbox_only = is_claude || is_gpt ||
+        model_lower.contains("gemini-3.7") ||
         model_lower.contains("gemini-3.6") ||
         model_lower.contains("gemini-3.5") ||
         model_lower.contains("gemini-3-flash") ||
@@ -1536,7 +1589,7 @@ async fn handle_chat_completion_internal(
                         } else if parsed_err.is_model_unsupported && !use_cli_pool {
                             let clean_model = model_name.replace("antigravity-", "");
                             let known_models = vec![
-                                "claude-sonnet-4-5", "claude-opus-4-6-thinking", "gemini-3-flash", "gemini-3.1-pro", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.1-flash"
+                                "claude-sonnet-4-5", "claude-opus-4-6-thinking", "gemini-3-flash", "gemini-3.1-pro", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.1-flash"
                             ];
                             let is_known = known_models.iter().any(|m| clean_model.starts_with(m)) || clean_model == "gemini-pro-agent";
                             if !is_known {
@@ -1655,6 +1708,8 @@ async fn handle_chat_completion_internal(
                     let mut line_buffer = String::new();
                     let mut stream_state = StreamState { images_appended: HashSet::new() };
                     
+                    let mut latest_sig = String::new();
+                    let mut seen_non_stream_tc_ids: Vec<String> = Vec::new();
                     let mut upstream = stream;
                     while let Some(chunk_res) = upstream.next().await {
                         if let Ok(chunk) = chunk_res {
@@ -1667,6 +1722,12 @@ async fn handle_chat_completion_internal(
                                 if line.starts_with("data: ") && line != "data: [DONE]" {
                                     if let Ok(event_json) = serde_json::from_str::<Value>(&line[6..]) {
                                         if let Some(chunk_opt) = transform_google_event_to_openai(&event_json, &model_name, "", false, &mut stream_state) {
+                                            if let Some(sig) = &chunk_opt._signature {
+                                                latest_sig = sig.clone();
+                                                for tc_id in &seen_non_stream_tc_ids {
+                                                    cache_call_id_signature(tc_id, &latest_sig);
+                                                }
+                                            }
                                             if let Some(choice) = chunk_opt.choices.first() {
                                                 if let Some(c) = &choice.delta.content {
                                                     full_content.push_str(c);
@@ -1675,6 +1736,14 @@ async fn handle_chat_completion_internal(
                                                     reasoning_content.push_str(r);
                                                 }
                                                 if let Some(t) = &choice.delta.tool_calls {
+                                                    for tc in t {
+                                                        if let Some(tc_id) = tc.get("id").and_then(|v| v.as_str()) {
+                                                            seen_non_stream_tc_ids.push(tc_id.to_string());
+                                                            if !latest_sig.is_empty() {
+                                                                cache_call_id_signature(tc_id, &latest_sig);
+                                                            }
+                                                        }
+                                                    }
                                                     aggregated_tool_calls.extend(t.clone());
                                                 }
                                                 if let Some(fr) = &choice.finish_reason {
@@ -1767,8 +1836,8 @@ fn pipe_stream_events(
     headers: HeaderMap,
     _email: String,
     _use_cli_pool: bool,
-    client_id: String,
-    internal_retry_count: u32,
+    _client_id: String,
+    _internal_retry_count: u32,
 ) -> BoxFuture<'static, Result<(), String>> {
     async move {
         let mut buffer = String::new();
@@ -1778,7 +1847,6 @@ fn pipe_stream_events(
         let mut accumulated_thought = String::new();
         let mut accumulated_content = String::new();
         let mut latest_signature = String::new();
-        let loop_detected = false;
         let mut finish_event_line: Option<String> = None;
         let mut recent_content_buffer = String::new();
         let is_halted = false;
@@ -1789,6 +1857,7 @@ fn pipe_stream_events(
 
         let config_features = get_effective_features();
 
+        let mut seen_stream_tc_ids: Vec<String> = Vec::new();
         let stream_idle_timeout = Duration::from_secs(120);
         loop {
             let chunk_opt = match tokio::time::timeout(stream_idle_timeout, stream.next()).await {
@@ -1845,71 +1914,12 @@ fn pipe_stream_events(
 
                 if trimmed == "data: [DONE]" {
                     if !is_intercepting {
-                        let mut should_retry = false;
-                        if loop_detected || (!received_content && !accumulated_thought.trim().is_empty()) {
-                            should_retry = true;
-                        }
-
-                        if should_retry {
-                            if internal_retry_count >= 10 {
-                                log_warn!("[Empty Response] Max internal retries (10) reached. Aborting.");
-                            } else {
-                                if loop_detected {
-                                    log_info!("[Empty Response] Stream halted due to loop detection. Rerunning seamlessly... (attempts={})", internal_retry_count);
-                                } else {
-                                    log_info!("[Empty Response] Empty response detected after reasoning, retrying... (attempts={})", internal_retry_count);
-                                }
-
-                                // Perform retry
-                                let continuation_prompt = if loop_detected {
-                                    let mut cleaned = accumulated_content.clone();
-                                    // simple suffix deduplication
-                                    if cleaned.len() > 200 {
-                                        let split_idx = cleaned.floor_char_boundary(cleaned.len() - 100);
-                                        cleaned = cleaned[..split_idx].to_string();
-                                    }
-                                    format!("Here is your output so far:\n<thinking>\n{}\n</thinking>\n{}\nYou got stuck in a repetitive loop. Please continue from here without repeating yourself.", accumulated_thought, cleaned)
-                                } else {
-                                    format!("Here is your internal chain of thought so far:\n<thinking>\n{}\n</thinking>\nPlease continue your reasoning. **You must wrap your new reasoning in <thinking>...</thinking> tags.**", accumulated_thought)
-                                };
-
-                                // Formulate retry payload
-                                let retry_body = serde_json::json!({
-                                    "model": model,
-                                    "stream": true,
-                                    "messages": [
-                                        { "role": "assistant", "content": continuation_prompt }
-                                    ]
-                                });
-
-                                let auth_header = headers.get(header::AUTHORIZATION).cloned();
-                                let mut client_headers = HeaderMap::new();
-                                if let Some(a) = auth_header {
-                                    client_headers.insert(header::AUTHORIZATION, a);
-                                }
-
-                                // Recursively execute internal completion with retry count incremented
-                                let inner_res = handle_chat_completion_internal(client_headers, HashMap::new(), retry_body, Some(client_id.clone())).await;
-                                match inner_res {
-                                    Ok(_response) => {
-                                        // Pipe new stream directly into tx
-                                        log_info!("Retried stream established, redirecting output...");
-                                        // We'd copy the stream here. For simplicity, we just log and exit.
-                                        return Ok(());
-                                    }
-                                    Err(e) => {
-                                        log_err!("Continuation retry failed: {}", e.1);
-                                    }
-                                }
-                            }
-                        }
-
                         if let Some(f_line) = finish_event_line.as_ref() {
                             let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
                         }
                         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
                     }
-                    continue;
+                    return Ok(());
                 }
 
                 // Parse data payload
@@ -1918,6 +1928,9 @@ fn pipe_stream_events(
                         
                         if let Some(sig) = &openai_chunk._signature {
                             latest_signature = sig.clone();
+                            for tc_id in &seen_stream_tc_ids {
+                                cache_call_id_signature(tc_id, &latest_signature);
+                            }
                         }
                         if let Some(thg) = &openai_chunk._thought {
                             accumulated_thought.push_str(thg);
@@ -1927,6 +1940,16 @@ fn pipe_stream_events(
                         }
 
                         let choice = &openai_chunk.choices[0];
+                        if let Some(tc_arr) = &choice.delta.tool_calls {
+                            for tc in tc_arr {
+                                if let Some(tc_id) = tc.get("id").and_then(|v| v.as_str()) {
+                                    seen_stream_tc_ids.push(tc_id.to_string());
+                                    if !latest_signature.is_empty() {
+                                        cache_call_id_signature(tc_id, &latest_signature);
+                                    }
+                                }
+                            }
+                        }
                         
                         // Search Intercept detection
                         if let Some(tc_arr) = &choice.delta.tool_calls {
@@ -2058,6 +2081,13 @@ fn pipe_stream_events(
                     }
                 }
             }
+        }
+
+        if !is_intercepting {
+            if let Some(f_line) = finish_event_line.as_ref() {
+                let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
+            }
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
         }
 
         Ok(())

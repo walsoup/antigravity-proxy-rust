@@ -306,6 +306,15 @@ pub fn parse_google_error(body: &str) -> ParsedGoogleError {
             let err_status = err.get("status").and_then(|v| v.as_str()).unwrap_or("");
             let msg_str = message.as_ref().map(|s| s.as_str()).unwrap_or("");
 
+            if let Some(code) = err.get("code").and_then(|v| v.as_u64()) {
+                status = code as u16;
+            }
+
+            if err_status == "INVALID_ARGUMENT" {
+                reason = "invalid_argument".to_string();
+                status = 400;
+            }
+
             if err_status == "RESOURCE_EXHAUSTED" || msg_str.contains("quota") {
                 is_quota_exhausted = true;
                 reason = "quota_exhausted".to_string();
@@ -324,7 +333,15 @@ pub fn parse_google_error(body: &str) -> ParsedGoogleError {
                 status = 403;
             }
 
-            if err_status == "NOT_FOUND" || msg_str.contains("not found") || msg_str.contains("not supported") {
+            let msg_lower = msg_str.to_lowercase();
+            if err_status == "NOT_FOUND" 
+                || msg_lower.contains("model not found") 
+                || msg_lower.contains("is not found") 
+                || msg_lower.contains("publisher model") 
+                || msg_lower.contains("does not exist")
+                || msg_lower.contains("is not supported for this model") 
+                || (msg_lower.contains("the requested model") && msg_lower.contains("not supported"))
+            {
                 is_model_unsupported = true;
                 reason = "model_not_found".to_string();
                 status = 404;
@@ -526,6 +543,7 @@ pub fn transform_to_google_body(
         else if raw_model.ends_with("-medium") { Some("medium") }
         else if raw_model.ends_with("-high") { Some("high") }
         else if raw_model.ends_with("-xhigh") { Some("xhigh") }
+        else if raw_model.ends_with("-tiered") { Some("tiered") }
         else { None };
 
     let extracted_tier = tier_match;
@@ -583,6 +601,8 @@ pub fn transform_to_google_body(
             google_model = "gemini-3.1-flash-lite".to_string();
         } else if raw_model.contains("gpt-oss-120b") || base_model.contains("gpt-oss-120b") {
             google_model = "gpt-oss-120b-medium".to_string();
+        } else if base_model.contains("gemini-3.7") {
+            google_model = "gemini-3.7-flash-tiered".to_string();
         } else if base_model.contains("gemini-3.6") {
             let tier = adaptive_tier.as_deref().unwrap_or("high");
             if tier == "low" {
@@ -652,9 +672,11 @@ pub fn transform_to_google_body(
 
             let mut tool_call_id = msg.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if tool_call_id.starts_with("sig-") {
-                let parts: Vec<&str> = tool_call_id.split('-').collect();
-                if parts.len() >= 3 {
-                    tool_call_id = parts[2..].join("-");
+                let rest = &tool_call_id["sig-".len()..];
+                if let Some(idx) = rest.rfind("-call_") {
+                    tool_call_id = rest[idx + 1..].to_string();
+                } else if let Some((_, id_part)) = rest.rsplit_once('-') {
+                    tool_call_id = id_part.to_string();
                 }
             }
 
@@ -735,11 +757,18 @@ pub fn transform_to_google_body(
                         let mut clean_id = call_id.to_string();
 
                         if sig.is_empty() && call_id.starts_with("sig-") {
-                            let id_parts: Vec<&str> = call_id.split('-').collect();
-                            if id_parts.len() >= 3 {
-                                sig = id_parts[1].to_string();
-                                clean_id = id_parts[2..].join("-");
+                            let rest = &call_id["sig-".len()..];
+                            if let Some(idx) = rest.rfind("-call_") {
+                                sig = rest[..idx].to_string();
+                                clean_id = rest[idx + 1..].to_string();
+                            } else if let Some((sig_part, id_part)) = rest.rsplit_once('-') {
+                                sig = sig_part.to_string();
+                                clean_id = id_part.to_string();
                             }
+                        }
+
+                        if sig.is_empty() {
+                            sig = get_call_id_signature(&clean_id).unwrap_or_default();
                         }
 
                         let func_args_val = func.get("arguments").unwrap_or(&Value::Null);
@@ -762,10 +791,14 @@ pub fn transform_to_google_body(
                             "functionCall": func_call
                         });
 
-                        if !sig.is_empty() {
-                            func_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(sig.clone()));
-                            func_part.as_object_mut().unwrap().insert("thought_signature".to_string(), Value::String(sig));
-                        }
+                        let final_sig = if !sig.is_empty() {
+                            sig
+                        } else {
+                            "skip_thought_signature_validator".to_string()
+                        };
+
+                        func_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(final_sig.clone()));
+                        func_part.as_object_mut().unwrap().insert("thought_signature".to_string(), Value::String(final_sig));
 
                         parts.push(func_part);
                     }
@@ -961,6 +994,18 @@ pub fn transform_to_google_body(
                 "parts": [{ "text": "[System safeguard: Placeholder to ensure conversation starts with user message]" }]
             }));
         }
+        if !merged.is_empty() && merged.last().and_then(|m| m.get("role")).and_then(|r| r.as_str()) == Some("model") {
+            merged.push(serde_json::json!({
+                "role": "user",
+                "parts": [{ "text": "Continue" }]
+            }));
+        }
+        if merged.is_empty() {
+            merged.push(serde_json::json!({
+                "role": "user",
+                "parts": [{ "text": "Hello" }]
+            }));
+        }
         final_contents = merged;
     }
 
@@ -1047,8 +1092,14 @@ pub fn transform_to_google_body(
             "includeThoughts": true
         });
         if google_model.contains("gemini-3") {
-            let level = adaptive_tier.or(extracted_tier.map(|s| s.to_string())).unwrap_or_else(|| "low".to_string());
-            thinking_config.as_object_mut().unwrap().insert("thinkingLevel".to_string(), Value::String(level));
+            let raw_level = adaptive_tier.or(extracted_tier.map(|s| s.to_string()));
+            let level = match raw_level.as_deref() {
+                Some("high") | Some("xhigh") => "high",
+                Some("medium") => "medium",
+                Some("low") => "low",
+                _ => "low",
+            };
+            thinking_config.as_object_mut().unwrap().insert("thinkingLevel".to_string(), Value::String(level.to_string()));
         }
         google_request.get_mut("generationConfig").unwrap().as_object_mut().unwrap()
             .insert("thinkingConfig".to_string(), thinking_config);

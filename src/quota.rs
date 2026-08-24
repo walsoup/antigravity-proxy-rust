@@ -216,8 +216,9 @@ fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
         let label = m.get("displayMetadata").and_then(|dm| dm.get("label"))
             .or_else(|| m.get("displayName"))
             .or_else(|| m.get("model").and_then(|model| model.get("name")))
+            .or_else(|| m.get("model"))
             .and_then(|v| v.as_str())
-            .unwrap_or("Unknown");
+            .unwrap_or_else(|| if !key.is_empty() { key.as_str() } else { "Unknown" });
 
         let lower_label = label.to_lowercase();
         if label == "Unknown" || lower_label == "unknown" {
