@@ -1838,19 +1838,25 @@ pub fn convert_openai_response_to_anthropic(openai_res: Value, model_name: &str)
     })
 }
 
-pub fn append_dataset_record(model: &str, input_messages: &[Value], assistant_content: &str, assistant_thought: &str) {
+pub fn append_dataset_record(_model: &str, input_messages: &[Value], assistant_content: &str, assistant_thought: &str) {
     let mut messages: Vec<Value> = input_messages.to_vec();
+    
+    let final_assistant_content = if !assistant_thought.is_empty() {
+        if !assistant_content.is_empty() {
+            format!("<thought>\n{}\n</thought>\n\n{}", assistant_thought.trim(), assistant_content)
+        } else {
+            format!("<thought>\n{}\n</thought>", assistant_thought.trim())
+        }
+    } else {
+        assistant_content.to_string()
+    };
+
     let mut assistant_msg = serde_json::Map::new();
     assistant_msg.insert("role".to_string(), Value::String("assistant".to_string()));
-    assistant_msg.insert("content".to_string(), Value::String(assistant_content.to_string()));
-    if !assistant_thought.is_empty() {
-        assistant_msg.insert("reasoning_content".to_string(), Value::String(assistant_thought.to_string()));
-    }
+    assistant_msg.insert("content".to_string(), Value::String(final_assistant_content));
     messages.push(Value::Object(assistant_msg));
 
     let record = serde_json::json!({
-        "timestamp": current_iso_time(),
-        "model": model,
         "messages": messages
     });
 

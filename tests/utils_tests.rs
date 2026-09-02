@@ -327,12 +327,11 @@ fn test_append_dataset_record() {
         assert!(!lines.is_empty());
         let last_line = lines.last().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(last_line).unwrap();
-        assert_eq!(parsed["model"], "gemini-3.7-flash");
+        assert!(parsed.get("model").is_none());
         let msgs = parsed["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[2]["role"], "assistant");
-        assert_eq!(msgs[2]["content"], "Hi there! How can I help?");
-        assert_eq!(msgs[2]["reasoning_content"], "Thinking step 1");
+        assert_eq!(msgs[2]["content"], "<thought>\nThinking step 1\n</thought>\n\nHi there! How can I help?");
     }
 }
 
