@@ -551,6 +551,7 @@ pub fn transform_to_google_body(
 
     // Check for thinking effort/tier suffix
     let tier_match = if raw_model.contains("gpt-oss-120b") { None }
+        else if raw_model.ends_with("-none") { Some("none") }
         else if raw_model.ends_with("-low") { Some("low") }
         else if raw_model.ends_with("-medium") { Some("medium") }
         else if raw_model.ends_with("-high") { Some("high") }
@@ -615,7 +616,7 @@ pub fn transform_to_google_body(
             google_model = "gpt-oss-120b-medium".to_string();
         } else if base_model.contains("gemini-3.8") {
             let tier = adaptive_tier.as_deref().unwrap_or("high");
-            if tier == "low" {
+            if tier == "low" || tier == "none" || tier == "off" {
                 google_model = "gemini-3.8-flash-low".to_string();
             } else if tier == "medium" {
                 google_model = "gemini-3.8-flash-medium".to_string();
@@ -1086,8 +1087,22 @@ pub fn transform_to_google_body(
         google_request.as_object_mut().unwrap().insert("systemInstruction".to_string(), sys);
     }
 
+    let is_none_reasoning = adaptive_tier.as_deref() == Some("none") ||
+        adaptive_tier.as_deref() == Some("off") ||
+        adaptive_tier.as_deref() == Some("disabled") ||
+        thinking_budget == Some(0) ||
+        openai_body.get("thinking").and_then(|t| t.get("type")).and_then(|v| v.as_str()) == Some("disabled");
+
     let is_thinking_eligible = is_thinking_model || google_model.contains("gemini-3") || google_model.contains("agent") || google_model.contains("gemini-2.0-flash-thinking-exp");
-    if is_thinking_eligible && adaptive_tier.as_deref() != Some("none") {
+
+    if is_none_reasoning && (google_model.contains("gemini-3") || google_model.contains("thinking")) {
+        // Explicitly force thinkingBudget: 0 to disable server-side reasoning for ultra-low latency
+        let thinking_config = serde_json::json!({
+            "thinkingBudget": 0
+        });
+        google_request.get_mut("generationConfig").unwrap().as_object_mut().unwrap()
+            .insert("thinkingConfig".to_string(), thinking_config);
+    } else if is_thinking_eligible && !is_none_reasoning {
         let budget = thinking_budget.unwrap_or(16000);
         let mut thinking_config = serde_json::json!({
             "thinkingBudget": budget,

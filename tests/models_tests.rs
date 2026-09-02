@@ -122,3 +122,28 @@ fn test_m50_resolution() {
     let google_req = transform_to_google_body(&openai_body, "test-project", false, None, false);
     assert_eq!(google_req["model"], "gemini-3.1-flash-lite");
 }
+
+#[test]
+fn test_gemini_3_8_flash_no_reasoning_resolution() {
+    let openai_body = json!({
+        "model": "gemini-3.8-flash",
+        "reasoning_effort": "none",
+        "messages": [{ "role": "user", "content": "Hello" }]
+    });
+
+    let google_req = transform_to_google_body(&openai_body, "test-project", false, None, false);
+    assert_eq!(google_req["model"], "gemini-3.8-flash-low");
+    assert_eq!(google_req["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0);
+}
+
+#[test]
+fn test_gemini_3_8_flash_none_suffix_resolution() {
+    let openai_body = json!({
+        "model": "gemini-3.8-flash-none",
+        "messages": [{ "role": "user", "content": "Hello" }]
+    });
+
+    let google_req = transform_to_google_body(&openai_body, "test-project", false, None, false);
+    assert_eq!(google_req["model"], "gemini-3.8-flash-low");
+    assert_eq!(google_req["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0);
+}
