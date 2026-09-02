@@ -8,4 +8,5 @@ proxy_error.log
 proxy_error.log.old
 .env
 captured_prompts.jsonl
+captured_dataset.jsonl
 *.jsonl

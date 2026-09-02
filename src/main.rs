@@ -40,7 +40,7 @@ use antigravity_proxy_rust::utils::{
     parse_google_error, cache_signature, cache_call_id_signature,
     StreamState, generate_uuid_v4, generate_random_hex_8,
     normalize_model_name, convert_anthropic_body_to_openai, convert_openai_response_to_anthropic,
-    current_time_millis, current_time_secs, current_iso_time,
+    current_time_millis, current_time_secs, current_iso_time, append_dataset_record,
 };
 
 
@@ -1570,6 +1570,7 @@ async fn handle_chat_completion_internal(
                     let session_clone = session_id.clone();
                     let headers_clone = headers.clone();
                     let req_id_clone = format!("chatcmpl-{}", generate_random_hex_8());
+                    let input_messages = openai_body.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
                     let client_id_clone = client_id.clone();
                     tokio::spawn(async move {
@@ -1586,6 +1587,7 @@ async fn handle_chat_completion_internal(
                             use_cli_pool,
                             client_id_clone,
                             0, // retry count
+                            input_messages,
                         ).await {
                             log_err!("Streaming error occurred: {}", e);
                             let err_evt = Event::default().data(serde_json::json!({
@@ -1670,8 +1672,8 @@ async fn handle_chat_completion_internal(
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": if full_content.is_empty() { Value::Null } else { Value::String(full_content) },
-                            "reasoning_content": if reasoning_content.is_empty() { Value::Null } else { Value::String(reasoning_content) },
+                            "content": if full_content.is_empty() { Value::Null } else { Value::String(full_content.clone()) },
+                            "reasoning_content": if reasoning_content.is_empty() { Value::Null } else { Value::String(reasoning_content.clone()) },
                             "tool_calls": if aggregated_tool_calls.is_empty() { Value::Null } else { Value::Array(aggregated_tool_calls) }
                         },
                         "finish_reason": final_finish_reason
@@ -1687,6 +1689,11 @@ async fn handle_chat_completion_internal(
 
                     if let Some(usg) = final_usage {
                         resp_json.as_object_mut().unwrap().insert("usage".to_string(), usg);
+                    }
+
+                    if get_effective_features().capture_dataset && (!full_content.is_empty() || !reasoning_content.is_empty()) {
+                        let input_msgs = openai_body.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                        append_dataset_record(&model_name, &input_msgs, &full_content, &reasoning_content);
                     }
 
                     let mut response = Json(resp_json).into_response();
@@ -1744,6 +1751,7 @@ fn pipe_stream_events(
     _use_cli_pool: bool,
     _client_id: String,
     _internal_retry_count: u32,
+    input_messages: Vec<Value>,
 ) -> BoxFuture<'static, Result<(), String>> {
     async move {
         let mut buffer = String::new();
@@ -1769,6 +1777,9 @@ fn pipe_stream_events(
                             let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
                         }
                         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                        if get_effective_features().capture_dataset && (!accumulated_content.is_empty() || !accumulated_thought.is_empty()) {
+                            append_dataset_record(&model, &input_messages, &accumulated_content, &accumulated_thought);
+                        }
                         return Ok(());
                     }
                     return Err("Stream idle timeout exceeded (120s)".to_string());
@@ -1815,6 +1826,9 @@ fn pipe_stream_events(
                         let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
                     }
                     let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                    if get_effective_features().capture_dataset && (!accumulated_content.is_empty() || !accumulated_thought.is_empty()) {
+                        append_dataset_record(&model, &input_messages, &accumulated_content, &accumulated_thought);
+                    }
                     return Ok(());
                 }
 
@@ -1917,6 +1931,9 @@ fn pipe_stream_events(
             let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
         }
         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+        if get_effective_features().capture_dataset && (!accumulated_content.is_empty() || !accumulated_thought.is_empty()) {
+            append_dataset_record(&model, &input_messages, &accumulated_content, &accumulated_thought);
+        }
 
         Ok(())
     }.boxed()

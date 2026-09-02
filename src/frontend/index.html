@@ -906,6 +906,16 @@ Models available:
                                     </label>
                                     <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
                                         <div class="flex flex-col pr-4">
+                                            <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">📚 Capture Fine-Tuning Dataset</span>
+                                            <span class="text-xs text-on-surface-variant">Export full conversations &amp; thoughts to captured_dataset.jsonl in OpenAI format.</span>
+                                        </div>
+                                        <div class="relative shrink-0">
+                                            <input type="checkbox" id="settings-capture-dataset" class="sr-only peer">
+                                            <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                                        </div>
+                                    </label>
+                                    <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
+                                        <div class="flex flex-col pr-4">
                                             <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">🛡️ Safeguard: Fix Roles</span>
                                             <span class="text-xs text-on-surface-variant">Enforce alternating user/model roles and merge repeats.</span>
                                         </div>

@@ -152,6 +152,7 @@ pub struct FeaturesConfig {
     pub safety_level: String, // "block_none" | "block_only_high" | "block_medium_and_above" | "block_low_and_above" | "default"
     pub code_execution: bool,
     pub url_context: bool,
+    pub capture_dataset: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -270,6 +271,7 @@ impl Default for ProxyConfig {
                 safety_level: "block_none".to_string(),
                 code_execution: false,
                 url_context: false,
+                capture_dataset: false,
             },
             scheduling: SchedulingConfig {
                 mode: "balance".to_string(),

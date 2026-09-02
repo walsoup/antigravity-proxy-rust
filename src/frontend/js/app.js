@@ -920,6 +920,7 @@ async function loadSettings() {
             document.getElementById('settings-obscure-models').checked = config.features?.obscureModels ?? false;
             document.getElementById('settings-expose-variants').checked = config.features?.exposeVariants ?? false;
             document.getElementById('settings-prompt-caching').checked = config.features?.promptCaching ?? false;
+            document.getElementById('settings-capture-dataset').checked = config.features?.captureDataset ?? false;
             document.getElementById('settings-safeguard-roles').checked = config.features?.safeguardRoles ?? false;
             document.getElementById('settings-safeguard-empty').checked = config.features?.safeguardEmptyContent ?? false;
             document.getElementById('settings-safeguard-schemas').checked = config.features?.safeguardSchemas ?? false;
@@ -1122,6 +1123,7 @@ async function saveSettings(event) {
             obscureModels: document.getElementById('settings-obscure-models').checked,
             exposeVariants: document.getElementById('settings-expose-variants').checked,
             promptCaching: document.getElementById('settings-prompt-caching').checked,
+            captureDataset: document.getElementById('settings-capture-dataset').checked,
             safeguardRoles: document.getElementById('settings-safeguard-roles').checked,
             safeguardEmptyContent: document.getElementById('settings-safeguard-empty').checked,
             safeguardSchemas: document.getElementById('settings-safeguard-schemas').checked,

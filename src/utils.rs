@@ -851,17 +851,6 @@ pub fn transform_to_google_body(
     if let Some(sys_msg) = system_message {
         if let Some(content_str) = sys_msg.get("content").and_then(|v| v.as_str()) {
             let mut text = content_str.to_string();
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("captured_prompts.jsonl") {
-                    let _ = serde_json::to_writer(&mut f, &serde_json::json!({
-                        "ts": current_iso_time(),
-                        "model": raw_model,
-                        "system": text
-                    }));
-                    let _ = writeln!(f);
-                }
-            }
             if features.sanitize_antigravity_prompts {
                 let tags = vec![
                     "identity", "user_information", "web_application_development", 
@@ -1848,4 +1837,28 @@ pub fn convert_openai_response_to_anthropic(openai_res: Value, model_name: &str)
         }
     })
 }
+
+pub fn append_dataset_record(model: &str, input_messages: &[Value], assistant_content: &str, assistant_thought: &str) {
+    let mut messages: Vec<Value> = input_messages.to_vec();
+    let mut assistant_msg = serde_json::Map::new();
+    assistant_msg.insert("role".to_string(), Value::String("assistant".to_string()));
+    assistant_msg.insert("content".to_string(), Value::String(assistant_content.to_string()));
+    if !assistant_thought.is_empty() {
+        assistant_msg.insert("reasoning_content".to_string(), Value::String(assistant_thought.to_string()));
+    }
+    messages.push(Value::Object(assistant_msg));
+
+    let record = serde_json::json!({
+        "timestamp": current_iso_time(),
+        "model": model,
+        "messages": messages
+    });
+
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("captured_dataset.jsonl") {
+        use std::io::Write;
+        let _ = serde_json::to_writer(&mut file, &record);
+        let _ = writeln!(file);
+    }
+}
+
 
