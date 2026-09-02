@@ -10,3 +10,4 @@ proxy_error.log.old
 captured_prompts.jsonl
 captured_dataset.jsonl
 *.jsonl
+experiments/
