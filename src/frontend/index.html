@@ -532,6 +532,12 @@ export ANTHROPIC_API_KEY="antigravity"
         "baseURL": "http://localhost:3000/v1"
       },
       "models": {
+        "gemini-3.8-flash": {
+          "name": "Gemini 3.8 flash",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "reasoning": true
+        },
         "gemini-3.7-flash": {
           "name": "Gemini 3.7 flash",
           "limit": { "context": 1048576, "output": 65536 },
@@ -615,6 +621,8 @@ API Key: antigravity (or any string)
 
 Models available:
 - antigravity-auto
+- gemini-3.8-flash
+- gemini-3.8-flash-high / medium / low
 - gemini-3.7-flash
 - gemini-3.7-flash-high / medium / low / tiered
 - gemini-3.6-flash

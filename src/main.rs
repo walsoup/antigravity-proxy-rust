@@ -372,6 +372,10 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
     }
 
     let default_models = vec![
+        "gemini-3.8-flash",
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low",
         "gemini-3.7-flash",
         "gemini-3.7-flash-high",
         "gemini-3.7-flash-medium",
@@ -1282,6 +1286,7 @@ async fn handle_chat_completion_internal(
     let is_streaming = openai_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let is_sandbox_only = is_claude || is_gpt ||
+        model_lower.contains("gemini-3.8") ||
         model_lower.contains("gemini-3.7") ||
         model_lower.contains("gemini-3.6") ||
         model_lower.contains("gemini-3.5") ||
@@ -1495,7 +1500,7 @@ async fn handle_chat_completion_internal(
                         } else if parsed_err.is_model_unsupported && !use_cli_pool {
                             let clean_model = model_name.replace("antigravity-", "");
                             let known_models = vec![
-                                "claude-sonnet-4-5", "claude-opus-4-6-thinking", "gemini-3-flash", "gemini-3.1-pro", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.1-flash"
+                                "claude-sonnet-4-5", "claude-opus-4-6-thinking", "gemini-3-flash", "gemini-3.1-pro", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.1-flash"
                             ];
                             let is_known = known_models.iter().any(|m| clean_model.starts_with(m)) || clean_model == "gemini-pro-agent";
                             if !is_known {

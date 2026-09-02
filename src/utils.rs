@@ -613,6 +613,15 @@ pub fn transform_to_google_body(
             google_model = "gemini-3.1-flash-lite".to_string();
         } else if raw_model.contains("gpt-oss-120b") || base_model.contains("gpt-oss-120b") {
             google_model = "gpt-oss-120b-medium".to_string();
+        } else if base_model.contains("gemini-3.8") {
+            let tier = adaptive_tier.as_deref().unwrap_or("high");
+            if tier == "low" {
+                google_model = "gemini-3.8-flash-low".to_string();
+            } else if tier == "medium" {
+                google_model = "gemini-3.8-flash-medium".to_string();
+            } else {
+                google_model = "gemini-3.8-flash-high".to_string();
+            }
         } else if base_model.contains("gemini-3.7") {
             google_model = "gemini-3.7-flash-tiered".to_string();
         } else if base_model.contains("gemini-3.6") {
