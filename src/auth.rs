@@ -1235,7 +1235,7 @@ pub fn generate_fingerprint_for_email(email: Option<&str>) -> DeviceFingerprint 
     };
 
     DeviceFingerprint {
-        user_agent: format!("antigravity/2.2.1 {}", platform),
+        user_agent: format!("antigravity/99.0.0 {}", platform),
         quota_user,
         device_id,
         platform,
@@ -1285,7 +1285,7 @@ pub fn get_impersonation_headers_builder(
     headers.insert(
         reqwest::header::USER_AGENT,
         reqwest::header::HeaderValue::from_static(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/2.2.1 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/99.0.0 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36"
         ),
     );
     headers.insert(
@@ -1303,19 +1303,25 @@ pub fn get_impersonation_headers_builder(
 
     let client_metadata_str = if let Some(m) = &fingerprint.client_metadata {
         serde_json::json!({
-            "ideType": m.ide_type,
+            "ideType": "ANTIGRAVITY",
             "platform": m.platform,
             "pluginType": m.plugin_type,
+            "channel": "NIGHTLY",
             "osVersion": m.os_version,
             "arch": m.arch
         }).to_string()
     } else {
-        r#"{"ideType":"VSCODE","platform":"MACOS","pluginType":"GEMINI","osVersion":"15.1","arch":"arm64"}"#.to_string()
+        r#"{"ideType":"ANTIGRAVITY","platform":"MACOS","pluginType":"GEMINI","channel":"NIGHTLY","osVersion":"15.1","arch":"arm64"}"#.to_string()
     };
 
     headers.insert(
         reqwest::header::HeaderName::from_static("client-metadata"),
         reqwest::header::HeaderValue::from_str(&client_metadata_str).unwrap(),
+    );
+
+    headers.insert(
+        reqwest::header::HeaderName::from_static("x-goog-experiments"),
+        reqwest::header::HeaderValue::from_static("enable_all_canary_models"),
     );
 
     if let Some(m) = model {
