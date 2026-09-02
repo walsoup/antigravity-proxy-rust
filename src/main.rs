@@ -1440,8 +1440,16 @@ async fn handle_chat_completion_internal(
                 google_url.split('/').nth(2).unwrap_or("unknown"), target_model);
         }
 
-        let timeout_key = config.models.timeouts.keys().find(|k| model_lower.contains(k.as_str())).map(|s| s.as_str()).unwrap_or("default");
-        let timeout_ms = config.models.timeouts.get(timeout_key).copied().unwrap_or(30000);
+        let is_reasoning_model = model_lower.contains("thinking") ||
+            model_lower.contains("gemini-3.8") ||
+            model_lower.contains("gemini-3.7") ||
+            model_lower.contains("gemini-3.6");
+        let timeout_key = if is_reasoning_model && config.models.timeouts.contains_key("thinking") {
+            "thinking"
+        } else {
+            config.models.timeouts.keys().find(|k| model_lower.contains(k.as_str())).map(|s| s.as_str()).unwrap_or("default")
+        };
+        let timeout_ms = config.models.timeouts.get(timeout_key).copied().unwrap_or(60000);
 
         if config_features.jitter_enabled {
             let j_min = config_features.jitter_min_ms;

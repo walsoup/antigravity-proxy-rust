@@ -9,9 +9,9 @@ use crate::config::{get_proxy_config, get_effective_features};
 pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .tcp_nodelay(true)
-        .tcp_keepalive(std::time::Duration::from_secs(59))
+        .tcp_keepalive(std::time::Duration::from_secs(15))
         .pool_max_idle_per_host(10)
-        .pool_idle_timeout(std::time::Duration::from_secs(59))
+        .pool_idle_timeout(std::time::Duration::from_secs(15))
         .build()
         .unwrap_or_default()
 });

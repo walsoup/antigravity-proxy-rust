@@ -180,10 +180,13 @@ pub struct SecurityConfig {
 impl Default for ProxyConfig {
     fn default() -> Self {
         let mut timeouts = HashMap::new();
-        timeouts.insert("default".to_string(), 30000);
-        timeouts.insert("claude".to_string(), 60000);
-        timeouts.insert("gemini-3-pro".to_string(), 45000);
-        timeouts.insert("gemini-3.1-pro".to_string(), 45000);
+        timeouts.insert("default".to_string(), 60000);
+        timeouts.insert("claude".to_string(), 90000);
+        timeouts.insert("gemini-3.8".to_string(), 120000);
+        timeouts.insert("gemini-3.7".to_string(), 120000);
+        timeouts.insert("gemini-3.6".to_string(), 120000);
+        timeouts.insert("gemini-3-pro".to_string(), 60000);
+        timeouts.insert("gemini-3.1-pro".to_string(), 60000);
         timeouts.insert("thinking".to_string(), 120000);
 
         ProxyConfig {
