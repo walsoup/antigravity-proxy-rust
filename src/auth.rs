@@ -292,7 +292,7 @@ pub fn mark_cooldown(email: &str, pool: &str, model_family: &str, reset_time_str
         base_duration = parse_duration(reset_str);
     }
 
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = crate::utils::current_time_millis();
     let key = format!("{}|{}|{}", email, pool, model_family);
 
     let mut state = AUTH_STATE.write().unwrap();
@@ -352,7 +352,7 @@ pub fn reset_all_cooldowns() {
 }
 
 pub fn flag_account_challenge(email: &str, pool: &str, model_family: &str, challenge: serde_json::Value) {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = crate::utils::current_time_millis();
     let expiry = now + 3600000;
     let key = format!("{}|{}|{}", email, pool, model_family);
 
@@ -568,8 +568,8 @@ pub fn get_earliest_reset(_pool: &str) -> Option<String> {
         if let Some(quota) = &acc.quota {
             for q in quota {
                 if let Some(reset_time) = &q.reset_time {
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_time) {
-                        reset_times.push(dt.timestamp_millis());
+                    if let Some(millis) = crate::utils::parse_rfc3339_to_millis(reset_time) {
+                        reset_times.push(millis);
                     }
                 }
             }
@@ -579,7 +579,7 @@ pub fn get_earliest_reset(_pool: &str) -> Option<String> {
         return None;
     }
     let min_reset = *reset_times.iter().min().unwrap();
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = crate::utils::current_time_millis() as i64;
     let diff_ms = std::cmp::max(0, min_reset - now);
     let hours = diff_ms / 3600000;
     let minutes = (diff_ms % 3600000) / 60000;
@@ -629,7 +629,7 @@ pub async fn update_account_usage(email: &str, success: bool, model: Option<&str
                 acc.consecutive_failures = Some(0);
             }
         }
-        acc.last_used = chrono::Utc::now().timestamp_millis() as u64;
+        acc.last_used = crate::utils::current_time_millis();
         let delta = if success {
             2
         } else if status == Some(403) {
@@ -697,7 +697,7 @@ pub async fn get_best_account(
     if accounts.is_empty() {
         return None;
     }
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = crate::utils::current_time_millis();
     
     // Filter to usable accounts: having refresh token, no captcha challenge, and not excluded
     let usable: Vec<AntigravityAccount> = accounts.into_iter().filter(|a| {
@@ -839,7 +839,7 @@ pub async fn get_best_account(
 }
 
 async fn ensure_account_ready(mut account: AntigravityAccount) -> Option<AntigravityAccount> {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = crate::utils::current_time_millis();
     let config = get_proxy_config();
     
     let needs_refresh = account.access_token.is_none() || 
@@ -870,7 +870,7 @@ async fn ensure_account_ready(mut account: AntigravityAccount) -> Option<Antigra
         println!("[Manager] Refreshing access token for {}", account.email);
         match refresh_access_token(&account.refresh_token).await {
             Ok(tokens) => {
-                let now = chrono::Utc::now().timestamp_millis() as u64;
+                let now = crate::utils::current_time_millis();
                 if let Some(rt) = tokens.refresh_token {
                     account.refresh_token = rt;
                 }
@@ -1253,7 +1253,7 @@ pub fn generate_fingerprint_for_email(email: Option<&str>) -> DeviceFingerprint 
             arch: Some(arch),
             sqm_id: Some(crate::utils::generate_uuid_v4()),
         }),
-        created_at: Some(chrono::Utc::now().timestamp_millis() as u64),
+        created_at: Some(crate::utils::current_time_millis()),
     }
 }
 

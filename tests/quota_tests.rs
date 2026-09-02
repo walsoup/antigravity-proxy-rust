@@ -1,5 +1,4 @@
-use antigravity_proxy_rust::config::{ProxyConfig, EndpointsConfig};
-use antigravity_proxy_rust::auth::{AntigravityAccount, load_accounts_config, get_accounts};
+use antigravity_proxy_rust::auth::{load_accounts_config, get_accounts};
 use antigravity_proxy_rust::quota::fetch_quota;
 
 #[test]

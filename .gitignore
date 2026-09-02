@@ -7,3 +7,5 @@ config.json
 proxy_error.log
 proxy_error.log.old
 .env
+captured_prompts.jsonl
+*.jsonl

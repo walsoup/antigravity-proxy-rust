@@ -908,18 +908,17 @@ async function loadSettings() {
             
             // Populate Features
             document.getElementById('settings-google-grounding').checked = config.features?.googleSearchGrounding ?? false;
+            document.getElementById('settings-code-execution').checked = config.features?.codeExecution ?? false;
+            document.getElementById('settings-url-context').checked = config.features?.urlContext ?? false;
+            document.getElementById('settings-safety-level').value = config.features?.safetyLevel || 'block_none';
             document.getElementById('settings-keep-thinking').checked = config.features?.keepThinking ?? false;
             document.getElementById('settings-sanitize-tools').checked = config.features?.sanitizeToolNames ?? false;
             document.getElementById('settings-sanitize-antigravity').checked = config.features?.sanitizeAntigravityPrompts ?? false;
             document.getElementById('settings-disable-request-logging').checked = config.logging?.disableRequestLogging ?? false;
             document.getElementById('settings-fast-mode').checked = config.features?.fastMode ?? false;
-            document.getElementById('settings-synthetic-search').checked = config.features?.syntheticSearch ?? false;
-            document.getElementById('settings-synthetic-search-model').value = config.features?.syntheticSearchModel || 'gemini-2.5-flash';
-            document.getElementById('settings-intercept-search').checked = config.features?.interceptSearch ?? false;
             document.getElementById('settings-prioritize-search').checked = config.features?.prioritizeSearchOverTools ?? false;
             document.getElementById('settings-obscure-models').checked = config.features?.obscureModels ?? false;
             document.getElementById('settings-expose-variants').checked = config.features?.exposeVariants ?? false;
-            document.getElementById('settings-exact-caching').checked = config.features?.exactRequestCaching ?? false;
             document.getElementById('settings-prompt-caching').checked = config.features?.promptCaching ?? false;
             document.getElementById('settings-safeguard-roles').checked = config.features?.safeguardRoles ?? false;
             document.getElementById('settings-safeguard-empty').checked = config.features?.safeguardEmptyContent ?? false;
@@ -935,10 +934,9 @@ async function loadSettings() {
             const fastModeToggle = document.getElementById('settings-fast-mode');
             const toggleElements = [
                 'settings-google-grounding',
+                'settings-code-execution',
+                'settings-url-context',
                 'settings-keep-thinking',
-                'settings-synthetic-search',
-                'settings-intercept-search',
-                'settings-exact-caching',
                 'settings-prompt-caching',
                 'settings-safeguard-roles',
                 'settings-safeguard-empty',
@@ -1113,17 +1111,16 @@ async function saveSettings(event) {
         },
         features: {
             googleSearchGrounding: document.getElementById('settings-google-grounding').checked,
+            codeExecution: document.getElementById('settings-code-execution').checked,
+            urlContext: document.getElementById('settings-url-context').checked,
+            safetyLevel: document.getElementById('settings-safety-level').value,
             keepThinking: document.getElementById('settings-keep-thinking').checked,
             sanitizeToolNames: document.getElementById('settings-sanitize-tools').checked,
             sanitizeAntigravityPrompts: document.getElementById('settings-sanitize-antigravity').checked,
             fastMode: document.getElementById('settings-fast-mode').checked,
-            syntheticSearch: document.getElementById('settings-synthetic-search').checked,
-            syntheticSearchModel: document.getElementById('settings-synthetic-search-model').value.trim(),
-            interceptSearch: document.getElementById('settings-intercept-search').checked,
             prioritizeSearchOverTools: document.getElementById('settings-prioritize-search').checked,
             obscureModels: document.getElementById('settings-obscure-models').checked,
             exposeVariants: document.getElementById('settings-expose-variants').checked,
-            exactRequestCaching: document.getElementById('settings-exact-caching').checked,
             promptCaching: document.getElementById('settings-prompt-caching').checked,
             safeguardRoles: document.getElementById('settings-safeguard-roles').checked,
             safeguardEmptyContent: document.getElementById('settings-safeguard-empty').checked,

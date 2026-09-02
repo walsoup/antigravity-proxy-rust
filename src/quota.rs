@@ -2,7 +2,6 @@ use serde_json::Value;
 use std::collections::{HashSet, HashMap};
 use std::sync::RwLock;
 use once_cell::sync::Lazy;
-use chrono::{DateTime, Utc};
 use crate::config::get_proxy_config;
 use crate::auth::{
     AntigravityAccount, QuotaEntry, get_accounts,
@@ -87,7 +86,7 @@ pub async fn fetch_quota(account: &AntigravityAccount, retry_enabled: bool) -> R
                 println!("Quota fetch 401 for {}, refreshing token...", account.email);
                 match refresh_access_token(&current_refresh_token).await {
                     Ok(tokens) => {
-                        let now = Utc::now().timestamp_millis() as u64;
+                        let now = crate::utils::current_time_millis();
                         if let Some(rt) = tokens.refresh_token.clone() {
                             current_refresh_token = rt;
                         }
@@ -165,21 +164,52 @@ async fn add_account_updated(account: AntigravityAccount) {
     crate::auth::add_account(account).await;
 }
 
-fn get_next_midnight_pt() -> String {
-    // Current time in Los Angeles
-    let pt_tz = chrono_tz::US::Pacific;
-    let now_pt = Utc::now().with_timezone(&pt_tz);
-    
-    // Set to 00:00:00 of next day
-    let tomorrow_pt = (now_pt + chrono::Duration::days(1))
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_local_timezone(pt_tz)
-        .unwrap();
+fn is_pacific_dst(dt: time::OffsetDateTime) -> bool {
+    let year = dt.year();
+    let month = dt.month() as u8;
+    if month < 3 || month > 11 {
+        return false;
+    }
+    if month > 3 && month < 11 {
+        return true;
+    }
+    if month == 3 {
+        let march_1 = time::Date::from_calendar_date(year, time::Month::March, 1).unwrap();
+        let first_sunday = (7 - march_1.weekday().number_days_from_sunday() % 7) % 7 + 1;
+        let second_sunday = first_sunday + 7;
+        let day = dt.day();
+        if day < second_sunday {
+            false
+        } else if day > second_sunday {
+            true
+        } else {
+            dt.hour() >= 10
+        }
+    } else {
+        let nov_1 = time::Date::from_calendar_date(year, time::Month::November, 1).unwrap();
+        let first_sunday = (7 - nov_1.weekday().number_days_from_sunday() % 7) % 7 + 1;
+        let day = dt.day();
+        if day < first_sunday {
+            true
+        } else if day > first_sunday {
+            false
+        } else {
+            dt.hour() < 9
+        }
+    }
+}
 
-    let utc_dt: DateTime<Utc> = tomorrow_pt.with_timezone(&Utc);
-    utc_dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+fn get_next_midnight_pt() -> String {
+    let now_utc = time::OffsetDateTime::now_utc();
+    let is_dst = is_pacific_dst(now_utc);
+    let offset_hours = if is_dst { -7 } else { -8 };
+    let pt_offset = time::UtcOffset::from_hms(offset_hours, 0, 0).unwrap();
+    let now_pt = now_utc.to_offset(pt_offset);
+
+    let tomorrow_date = now_pt.date() + time::Duration::days(1);
+    let midnight_pt = tomorrow_date.with_hms(0, 0, 0).unwrap().assume_offset(pt_offset);
+    let midnight_utc = midnight_pt.to_offset(time::UtcOffset::UTC);
+    midnight_utc.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
 }
 
 fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
@@ -266,21 +296,24 @@ fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
                     if millis < 10000000000 {
                         millis *= 1000;
                     }
-                    if let Some(dt) = DateTime::from_timestamp_millis(millis) {
-                        reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                    if let Some(s) = crate::utils::format_millis_to_rfc3339(millis) {
+                        reset_time_str = Some(s);
                     }
                 } else if let Some(s) = rt.as_str() {
                     if s.ends_with('s') && s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
                         let sec_str = &s[0..s.len() - 1];
                         if let Ok(sec) = sec_str.parse::<i64>() {
-                            if let Some(dt) = DateTime::from_timestamp_millis(Utc::now().timestamp_millis() + sec * 1000) {
-                                reset_time_str = Some(dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                            let target_millis = (crate::utils::current_time_millis() as i64) + sec * 1000;
+                            if let Some(formatted) = crate::utils::format_millis_to_rfc3339(target_millis) {
+                                reset_time_str = Some(formatted);
                             }
                         }
                     } else {
                         // try to parse ISO format or fallback
-                        if let Ok(parsed) = DateTime::parse_from_rfc3339(s) {
-                            reset_time_str = Some(parsed.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                        if let Some(millis) = crate::utils::parse_rfc3339_to_millis(s) {
+                            if let Some(formatted) = crate::utils::format_millis_to_rfc3339(millis) {
+                                reset_time_str = Some(formatted);
+                            }
                         }
                     }
                 }
@@ -292,8 +325,8 @@ fn parse_quota_response(data: &Value) -> Option<Vec<QuotaEntry>> {
 
             let r_str = reset_time_str.unwrap();
             let mut diff_ms = 0i64;
-            if let Ok(parsed_dt) = DateTime::parse_from_rfc3339(&r_str) {
-                diff_ms = std::cmp::max(0, parsed_dt.timestamp_millis() - Utc::now().timestamp_millis());
+            if let Some(parsed_millis) = crate::utils::parse_rfc3339_to_millis(&r_str) {
+                diff_ms = std::cmp::max(0, parsed_millis - (crate::utils::current_time_millis() as i64));
             }
             let hours = diff_ms / (1000 * 60 * 60);
             let minutes = (diff_ms % (1000 * 60 * 60)) / (1000 * 60);

@@ -786,6 +786,25 @@ Models available:
                                 </label>
                             </div>
 
+                            <!-- Safety Settings Selector -->
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-surface-container-low/30 p-4 border border-outline-variant/20 rounded-2xl">
+                                <div class="flex flex-col gap-1">
+                                    <label class="text-xs font-bold text-on-surface flex items-center gap-1.5" for="settings-safety-level">
+                                        <span class="material-symbols-outlined text-sm text-primary-fixed-dim">policy</span> Safety Filtering Level
+                                    </label>
+                                    <span class="text-[11px] text-on-surface-variant leading-tight">Control Google's Responsible AI (RAI) content filter threshold.</span>
+                                </div>
+                                <div class="flex items-center">
+                                    <select id="settings-safety-level" class="w-full bg-surface-container-low border border-outline-variant/40 rounded-xl py-2 px-3 text-on-surface focus:outline-none focus:border-primary-fixed-dim text-xs font-semibold">
+                                        <option value="block_none">Off / Uncensored (BLOCK_NONE) - Default</option>
+                                        <option value="block_only_high">Block Only High (BLOCK_ONLY_HIGH)</option>
+                                        <option value="block_medium_and_above">Block Medium & Above (BLOCK_MEDIUM_AND_ABOVE)</option>
+                                        <option value="block_low_and_above">Block Low & Above (BLOCK_LOW_AND_ABOVE)</option>
+                                        <option value="default">Provider Default</option>
+                                    </select>
+                                </div>
+                            </div>
+
                             <!-- Collapsible Safeguards & Routing -->
                             <details class="group border border-outline-variant/30 rounded-2xl bg-surface-container-low/30 overflow-hidden" open>
                                 <summary class="cursor-pointer font-bold text-sm flex items-center justify-between p-4 bg-surface-container-low/50 hover:bg-surface-container-low transition-colors select-none">
@@ -802,6 +821,26 @@ Models available:
                                         </div>
                                         <div class="relative shrink-0">
                                             <input type="checkbox" id="settings-google-grounding" class="sr-only peer">
+                                            <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                                        </div>
+                                    </label>
+                                    <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
+                                        <div class="flex flex-col pr-4">
+                                            <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">🐍 Native Code Execution</span>
+                                            <span class="text-xs text-on-surface-variant">Allow Gemini models to execute server-side Python in a sandbox.</span>
+                                        </div>
+                                        <div class="relative shrink-0">
+                                            <input type="checkbox" id="settings-code-execution" class="sr-only peer">
+                                            <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                                        </div>
+                                    </label>
+                                    <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
+                                        <div class="flex flex-col pr-4">
+                                            <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">🔗 URL Context / Web Fetch</span>
+                                            <span class="text-xs text-on-surface-variant">Allow Gemini models to natively fetch, parse, and analyze web URLs.</span>
+                                        </div>
+                                        <div class="relative shrink-0">
+                                            <input type="checkbox" id="settings-url-context" class="sr-only peer">
                                             <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
                                         </div>
                                     </label>
@@ -827,16 +866,6 @@ Models available:
                                     </label>
                                     <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
                                         <div class="flex flex-col pr-4">
-                                            <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">🔍 Synthetic Search Injection</span>
-                                            <span class="text-xs text-on-surface-variant">Inject synthetic search context into generation payload.</span>
-                                        </div>
-                                        <div class="relative shrink-0">
-                                            <input type="checkbox" id="settings-synthetic-search" class="sr-only peer">
-                                            <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
-                                        </div>
-                                    </label>
-                                    <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
-                                        <div class="flex flex-col pr-4">
                                             <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">🕵️ Enable Obscure Models</span>
                                             <span class="text-xs text-on-surface-variant">Allow routing to unlisted internal developer models.</span>
                                         </div>
@@ -857,31 +886,11 @@ Models available:
                                     </label>
                                     <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
                                         <div class="flex flex-col pr-4">
-                                            <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">🛑 Intercept Search</span>
-                                            <span class="text-xs text-on-surface-variant">Intercept and dynamically route Google search intents.</span>
-                                        </div>
-                                        <div class="relative shrink-0">
-                                            <input type="checkbox" id="settings-intercept-search" class="sr-only peer">
-                                            <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
-                                        </div>
-                                    </label>
-                                    <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
-                                        <div class="flex flex-col pr-4">
                                             <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">🛠️ Prioritize Search Over Tools</span>
                                             <span class="text-xs text-on-surface-variant">Strip custom tools when native web search is active.</span>
                                         </div>
                                         <div class="relative shrink-0">
                                             <input type="checkbox" id="settings-prioritize-search" class="sr-only peer">
-                                            <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
-                                        </div>
-                                    </label>
-                                    <label class="toggle-row relative flex justify-between items-center group cursor-pointer">
-                                        <div class="flex flex-col pr-4">
-                                            <span class="font-semibold text-on-surface text-sm group-hover:text-primary-fixed-dim transition-colors">⚡ Exact Request Caching</span>
-                                            <span class="text-xs text-on-surface-variant">Cache identical prompts locally for zero-latency repeats.</span>
-                                        </div>
-                                        <div class="relative shrink-0">
-                                            <input type="checkbox" id="settings-exact-caching" class="sr-only peer">
                                             <div class="w-10 h-6 bg-surface-variant/50 rounded-full border border-outline-variant/30 peer-checked:bg-primary-fixed-dim peer-checked:border-primary-fixed-dim after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-on-surface-variant peer-checked:after:bg-on-primary-fixed after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
                                         </div>
                                     </label>
@@ -940,10 +949,6 @@ Models available:
 
                             <!-- Text & Security Configs -->
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div class="flex flex-col gap-2">
-                                    <label class="text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider" for="settings-synthetic-search-model">Synthetic Search Model</label>
-                                    <input type="text" id="settings-synthetic-search-model" class="w-full bg-surface-container-low border border-outline-variant/40 rounded-xl py-2.5 px-4 text-on-surface focus:outline-none focus:border-primary-fixed-dim text-sm" placeholder="gemini-2.5-flash">
-                                </div>
                                 <div class="flex flex-col gap-2">
                                     <label class="text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider" for="settings-security-password">Console Passkey Authentication</label>
                                     <input type="password" id="settings-security-password" class="w-full bg-surface-container-low border border-outline-variant/40 rounded-xl py-2.5 px-4 text-on-surface focus:outline-none focus:border-primary-fixed-dim text-sm" placeholder="Leave blank to disable auth">

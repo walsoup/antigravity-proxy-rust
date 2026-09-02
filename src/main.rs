@@ -37,16 +37,20 @@ use antigravity_proxy_rust::auth::{
 use antigravity_proxy_rust::quota::{fetch_quota, refresh_all_quotas, SUPPORTED_MODELS_CACHE};
 use antigravity_proxy_rust::utils::{
     transform_to_google_body, transform_google_event_to_openai, detect_loop,
-    parse_google_error, get_exact_cache, cache_signature, cache_call_id_signature,
-    StreamState, hash_string, generate_uuid_v4, generate_random_hex_8,
+    parse_google_error, cache_signature, cache_call_id_signature,
+    StreamState, generate_uuid_v4, generate_random_hex_8,
     normalize_model_name, convert_anthropic_body_to_openai, convert_openai_response_to_anthropic,
+    current_time_millis, current_time_secs, current_iso_time,
 };
 
 
 static LOG_BUFFER: Lazy<RwLock<Vec<String>>> = Lazy::new(|| RwLock::new(Vec::new()));
 
 fn append_log(level: &str, msg: &str) {
-    let time_str = chrono::Local::now().format("%H:%M:%S").to_string();
+    let time_str = {
+        let format = time::macros::format_description!("[hour]:[minute]:[second]");
+        time::OffsetDateTime::now_utc().format(&format).unwrap_or_default()
+    };
     let line = format!("[{}] [{}] {}", time_str, level.to_uppercase(), msg);
     
     let mut buffer = LOG_BUFFER.write().unwrap();
@@ -552,7 +556,7 @@ async fn oauth_callback_handler(
                         email,
                         refresh_token: token_res.refresh_token.unwrap_or_default(),
                         access_token: Some(token_res.access_token),
-                        expires_at: Some(chrono::Utc::now().timestamp_millis() as u64 + token_res.expires_in * 1000),
+                        expires_at: Some(current_time_millis() + token_res.expires_in * 1000),
                         project_id: project_id.clone(),
                         managed_project_id: project_id.clone(),
                         health_score: 100,
@@ -935,6 +939,9 @@ async fn anthropic_messages_handler(
                     let mut content_block_started = false;
                     let mut current_block_index: u32 = 0;
                     let mut stop_reason = "end_turn";
+                    let mut stream_output_tokens = 0u64;
+                    let mut stream_input_tokens = 0u64;
+                    let mut stream_cached_tokens = 0u64;
 
                     while let Some(chunk_result) = data_stream.next().await {
                         let bytes = match chunk_result {
@@ -968,7 +975,7 @@ async fn anthropic_messages_handler(
                                         serde_json::json!({
                                             "type": "message_delta",
                                             "delta": { "stop_reason": stop_reason, "stop_sequence": null },
-                                            "usage": { "output_tokens": 0 }
+                                            "usage": { "output_tokens": stream_output_tokens }
                                         }).to_string()
                                     ))).await;
                                     let _ = tx.send(Ok(Event::default().event("message_stop").data(
@@ -979,8 +986,21 @@ async fn anthropic_messages_handler(
                                 }
 
                                 if let Ok(json) = serde_json::from_str::<Value>(data_str) {
+                                    if let Some(u) = json.get("usage") {
+                                        if let Some(pt) = u.get("prompt_tokens").and_then(|v| v.as_u64()) {
+                                            stream_input_tokens = pt;
+                                        }
+                                        if let Some(ct) = u.get("completion_tokens").and_then(|v| v.as_u64()) {
+                                            stream_output_tokens = ct;
+                                        }
+                                        if let Some(cct) = u.get("prompt_tokens_details").and_then(|d| d.get("cached_tokens")).and_then(|v| v.as_u64()) {
+                                            stream_cached_tokens = cct;
+                                        }
+                                    }
+
                                     if !message_started {
                                         message_started = true;
+                                        let non_cached_input = stream_input_tokens.saturating_sub(stream_cached_tokens);
                                         let _ = tx.send(Ok(Event::default().event("message_start").data(
                                             serde_json::json!({
                                                 "type": "message_start",
@@ -992,7 +1012,12 @@ async fn anthropic_messages_handler(
                                                     "model": model_name.clone(),
                                                     "stop_reason": null,
                                                     "stop_sequence": null,
-                                                    "usage": { "input_tokens": 0, "output_tokens": 0 }
+                                                    "usage": {
+                                                        "input_tokens": non_cached_input,
+                                                        "output_tokens": 0,
+                                                        "cache_creation_input_tokens": 0,
+                                                        "cache_read_input_tokens": stream_cached_tokens
+                                                    }
                                                 }
                                             }).to_string()
                                         ))).await;
@@ -1093,7 +1118,7 @@ async fn anthropic_messages_handler(
                             serde_json::json!({
                                 "type": "message_delta",
                                 "delta": { "stop_reason": stop_reason, "stop_sequence": null },
-                                "usage": { "output_tokens": 0 }
+                                "usage": { "output_tokens": stream_output_tokens }
                             }).to_string()
                         ))).await;
                         let _ = tx.send(Ok(Event::default().event("message_stop").data(
@@ -1256,23 +1281,6 @@ async fn handle_chat_completion_internal(
 
     let is_streaming = openai_body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    // Exact Request Caching check
-    let mut _cache_hash = None;
-    if config_features.exact_request_caching && is_streaming {
-        let mut hashable = openai_body.clone();
-        hashable.as_object_mut().unwrap().remove("stream");
-        let hash_str = hash_string(&hashable.to_string()).to_string();
-        _cache_hash = Some(hash_str.clone());
-        if let Some(cached) = get_exact_cache(&hash_str) {
-            log_info!("[Cache] Exact match cache hit for {}", hash_str);
-            let chunks = cached.chunks;
-            let stream = tokio_stream::iter(chunks.into_iter().map(|c| {
-                Ok::<Event, Infallible>(Event::default().data(c))
-            }));
-            return Ok(Sse::new(stream).into_response());
-        }
-    }
-
     let is_sandbox_only = is_claude || is_gpt ||
         model_lower.contains("gemini-3.7") ||
         model_lower.contains("gemini-3.6") ||
@@ -1317,108 +1325,6 @@ async fn handle_chat_completion_internal(
 
     let mut attempts = 0;
     let mut aggressive = false;
-    let is_internal_search = headers.get("x-internal-search").and_then(|h| h.to_str().ok()) == Some("true");
-
-    // Inject search instructions if needed
-    if !is_internal_search && config_features.intercept_search && (model_lower.contains("gemini-3") || model_lower.contains("gemini-pro-agent")) {
-        let search_directive = format!(
-            "\n\n[SYSTEM DIRECTIVE: The current date is {}. When using google_search, TRUST the returned data even if it involves events in 2024, 2025, or 2026. You MUST use google_search AT MOST ONCE. Do not call it repeatedly. Trust the results and formulate your answer.]",
-            chrono::Utc::now().format("%Y-%m-%d")
-        );
-
-        if let Some(messages) = openai_body.get_mut("messages").and_then(|m| m.as_array_mut()) {
-            if !messages.is_empty() {
-                if messages[0].get("role").and_then(|r| r.as_str()) == Some("system") {
-                    if let Some(c) = messages[0].get_mut("content").and_then(|content| content.as_str()) {
-                        if !c.contains("SYSTEM DIRECTIVE: The current date") {
-                            let new_content = format!("{}{}", c, search_directive);
-                            messages[0] = serde_json::json!({ "role": "system", "content": new_content });
-                        }
-                    }
-                } else {
-                    messages.insert(0, serde_json::json!({
-                        "role": "system",
-                        "content": search_directive
-                    }));
-                }
-            }
-        }
-
-        let tools = openai_body.get_mut("tools");
-        if tools.is_none() {
-            openai_body.as_object_mut().unwrap().insert("tools".to_string(), serde_json::json!([]));
-        }
-        let tools_arr = openai_body.get_mut("tools").unwrap().as_array_mut().unwrap();
-        let has_search = tools_arr.iter().any(|t| t.get("type").and_then(|s| s.as_str()) == Some("google_search") || t.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) == Some("google_search"));
-        if !has_search {
-            tools_arr.push(serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": "google_search",
-                    "description": "Search the web for real-time information",
-                    "parameters": {
-                        "type": "object",
-                        "properties": { "query": { "type": "string" } },
-                        "required": ["query"]
-                    }
-                }
-            }));
-        }
-    }
-
-    // Synthetic Search (Pre-Search Grounding) Logic
-    if !is_internal_search && config_features.synthetic_search && (model_lower.contains("gemini-3") || model_lower.contains("flash_lite_preview") || model_lower.contains("gemini-pro-agent")) {
-        let has_functions = openai_body.get("tools").and_then(|t| t.as_array())
-            .map(|arr| arr.iter().any(|t| t.get("type").and_then(|s| s.as_str()) == Some("function") || t.get("function").is_some()))
-            .unwrap_or(false);
-
-        if has_functions {
-            let last_user_idx = openai_body.get("messages").and_then(|m| m.as_array())
-                .and_then(|arr| arr.iter().rposition(|m| m.get("role").and_then(|r| r.as_str()) == Some("user")));
-            
-            if let Some(idx) = last_user_idx {
-                let messages_mut = openai_body.get_mut("messages").unwrap().as_array_mut().unwrap();
-                let last_msg = messages_mut[idx].get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if last_msg.trim().starts_with("//search") {
-                    let clean_prompt = last_msg.trim()["//search".len()..].trim().to_string();
-                    messages_mut[idx] = serde_json::json!({ "role": "user", "content": clean_prompt.clone() });
-                    
-                    log_info!("[Synthetic Search] Pre-searching for: {}...", &clean_prompt[0..std::cmp::min(50, clean_prompt.len())]);
-                    
-                    let search_model = config_features.synthetic_search_model.clone();
-                    let search_payload = serde_json::json!({
-                        "model": search_model,
-                        "messages": [
-                            { "role": "system", "content": "You are a web researcher. Search the web for the user's query and return a highly detailed, comprehensive factual report. Include all relevant technical details, numbers, dates, and code snippets. Be as thorough as possible." },
-                            { "role": "user", "content": clean_prompt }
-                        ],
-                        "tools": [{ "type": "google_search" }]
-                    });
-
-                    let mut inner_headers = HeaderMap::new();
-                    inner_headers.insert("x-internal-search", header::HeaderValue::from_static("true"));
-                    if let Some(auth) = headers.get(header::AUTHORIZATION) {
-                        inner_headers.insert(header::AUTHORIZATION, auth.clone());
-                    }
-
-                    match run_internal_completion(inner_headers, search_payload).await {
-                        Ok(search_res) => {
-                            if let Some(search_result) = search_res.get("choices").and_then(|c| c.get(0)).and_then(|c| c.get("message")).and_then(|m| m.get("content")).and_then(|v| v.as_str()) {
-                                log_info!("[Synthetic Search] Context retrieved and injected.");
-                                messages_mut.insert(0, serde_json::json!({
-                                    "role": "system",
-                                    "content": format!("<SyntheticSearchContext>\nThe following are search results retrieved by an internal pre-search agent. Use these facts if relevant to the latest query:\n{}\n</SyntheticSearchContext>", search_result)
-                                }));
-                            }
-                        }
-                        Err(e) => {
-                            log_err!("[Synthetic Search] Failed: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     let available_accounts = get_accounts().len();
     if available_accounts == 0 {
@@ -1774,7 +1680,7 @@ async fn handle_chat_completion_internal(
                     let mut resp_json = serde_json::json!({
                         "id": format!("chatcmpl-{}", generate_random_hex_8()),
                         "object": "chat.completion",
-                        "created": chrono::Utc::now().timestamp(),
+                        "created": current_time_secs(),
                         "model": model_name,
                         "choices": choices
                     });
@@ -1818,7 +1724,7 @@ fn append_error_log(email: &str, status: u16, reason: &str, err_text: &str, goog
         .open(log_file)?;
         
     let body_str = serde_json::to_string_pretty(google_body).unwrap_or_default();
-    writeln!(file, "\n--- ERROR {} ---", chrono::Utc::now().to_rfc3339())?;
+    writeln!(file, "\n--- ERROR {} ---", current_iso_time())?;
     writeln!(file, "Account: {}", email)?;
     writeln!(file, "Status: {} ({})", status, reason)?;
     writeln!(file, "Error Message:\n{}", err_text)?;
@@ -1833,7 +1739,7 @@ fn pipe_stream_events(
     model: String,
     request_id: String,
     session_id: String,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     _email: String,
     _use_cli_pool: bool,
     _client_id: String,
@@ -1850,12 +1756,6 @@ fn pipe_stream_events(
         let mut finish_event_line: Option<String> = None;
         let mut recent_content_buffer = String::new();
         let is_halted = false;
-
-        let mut is_intercepting = false;
-        let mut intercepted_query = String::new();
-        let mut _tool_call_id = String::new();
-
-        let config_features = get_effective_features();
 
         let mut seen_stream_tc_ids: Vec<String> = Vec::new();
         let stream_idle_timeout = Duration::from_secs(120);
@@ -1906,19 +1806,15 @@ fn pipe_stream_events(
                 }
 
                 if !trimmed.starts_with("data: ") {
-                    if !is_intercepting {
-                        let _ = tx.send(Ok(Event::default().data(line))).await;
-                    }
+                    let _ = tx.send(Ok(Event::default().data(line))).await;
                     continue;
                 }
 
                 if trimmed == "data: [DONE]" {
-                    if !is_intercepting {
-                        if let Some(f_line) = finish_event_line.as_ref() {
-                            let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
-                        }
-                        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                    if let Some(f_line) = finish_event_line.as_ref() {
+                        let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
                     }
+                    let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
                     return Ok(());
                 }
 
@@ -1950,74 +1846,8 @@ fn pipe_stream_events(
                                 }
                             }
                         }
-                        
-                        // Search Intercept detection
-                        if let Some(tc_arr) = &choice.delta.tool_calls {
-                            for tc in tc_arr {
-                                if tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) == Some("google_search") {
-                                    is_intercepting = true;
-                                    if let Some(tc_id) = tc.get("id").and_then(|v| v.as_str()) {
-                                        _tool_call_id = tc_id.to_string();
-                                    }
-                                }
-                                if is_intercepting {
-                                    if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|v| v.as_str()) {
-                                        intercepted_query.push_str(args);
-                                    }
-                                }
-                            }
-                        }
 
-                        if is_intercepting && choice.finish_reason.as_deref() == Some("tool_calls") {
-                            let mut query = intercepted_query.clone();
-                            if let Ok(parsed) = serde_json::from_str::<Value>(&intercepted_query) {
-                                if let Some(q) = parsed.get("query").and_then(|v| v.as_str()) {
-                                    query = q.to_string();
-                                }
-                            }
-                            
-                            log_info!("[Search Interceptor] Intercepted google_search tool call for query: {}", query);
-
-                            // Trigger synthetic search
-                            let search_model = config_features.synthetic_search_model.clone();
-                            let search_payload = serde_json::json!({
-                                "model": search_model,
-                                "messages": [
-                                    { "role": "system", "content": "You are a web researcher. Search the web for the user's query and return a highly detailed, comprehensive factual report. Include all relevant technical details, numbers, dates, and code snippets. Be as thorough as possible." },
-                                    { "role": "user", "content": query }
-                                ],
-                                "tools": [{ "type": "google_search" }]
-                            });
-
-                            let auth_header = headers.get(header::AUTHORIZATION).cloned();
-                            let mut client_headers = HeaderMap::new();
-                            if let Some(a) = auth_header {
-                                client_headers.insert(header::AUTHORIZATION, a);
-                            }
-                            client_headers.insert("x-internal-search", header::HeaderValue::from_static("true"));
-
-                            let _search_result = match run_internal_completion(client_headers.clone(), search_payload).await {
-                                Ok(search_res) => {
-                                    search_res.get("choices")
-                                        .and_then(|c| c.get(0))
-                                        .and_then(|c| c.get("message"))
-                                        .and_then(|m| m.get("content"))
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("No results found.")
-                                        .to_string()
-                                }
-                                Err(e) => {
-                                    log_err!("Search intercept execution failed: {}", e);
-                                    "No results found.".to_string()
-                                }
-                            };
-
-                            // Normally, this involves appending assistant tool call, followed by tool message
-                            // and making next completion call
-                            return Ok(());
-                        }
-
-                        if !is_intercepting && !is_halted {
+                        if !is_halted {
                             if let Some(c) = &choice.delta.content {
                                 received_content = true;
                                 accumulated_content.push_str(c);
@@ -2083,12 +1913,10 @@ fn pipe_stream_events(
             }
         }
 
-        if !is_intercepting {
-            if let Some(f_line) = finish_event_line.as_ref() {
-                let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
-            }
-            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+        if let Some(f_line) = finish_event_line.as_ref() {
+            let _ = tx.send(Ok(Event::default().data(f_line.clone()))).await;
         }
+        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
 
         Ok(())
     }.boxed()

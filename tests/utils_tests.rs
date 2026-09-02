@@ -1,4 +1,8 @@
-use antigravity_proxy_rust::utils::{detect_loop, clean_json_schema_for_antigravity, parse_google_error, transform_to_google_body, convert_openai_response_to_anthropic};
+use antigravity_proxy_rust::utils::{
+    detect_loop, clean_json_schema_for_antigravity, parse_google_error,
+    transform_to_google_body, convert_openai_response_to_anthropic,
+    transform_google_event_to_openai, StreamState
+};
 use serde_json::json;
 
 #[test]
@@ -228,6 +232,81 @@ fn test_transform_to_google_body_function_call_with_sig_id() {
     
     assert_eq!(func_part["thoughtSignature"], "my_secret_token_123");
     assert_eq!(func_part["thought_signature"], "my_secret_token_123");
+}
+
+#[test]
+fn test_transform_google_event_to_openai_cached_tokens() {
+    let mut state = StreamState { images_appended: std::collections::HashSet::new() };
+    let google_event = json!({
+        "response": {
+            "candidates": [{
+                "content": {
+                    "parts": [{ "text": "Hello world" }]
+                },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 1500,
+                "candidatesTokenCount": 50,
+                "totalTokenCount": 1550,
+                "cachedContentTokenCount": 1200
+            }
+        }
+    });
+
+    let chunk = transform_google_event_to_openai(&google_event, "gemini-3.7-flash", "chatcmpl-test", false, &mut state)
+        .expect("Chunk should transform successfully");
+
+    let usage = chunk.usage.expect("Usage should be present");
+    assert_eq!(usage["prompt_tokens"], 1500);
+    assert_eq!(usage["completion_tokens"], 50);
+    assert_eq!(usage["total_tokens"], 1550);
+    assert_eq!(usage["prompt_tokens_details"]["cached_tokens"], 1200);
+}
+
+#[test]
+fn test_convert_openai_response_to_anthropic_cached_tokens() {
+    let openai_res = json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Hello world"
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 2000,
+            "completion_tokens": 100,
+            "total_tokens": 2100,
+            "prompt_tokens_details": {
+                "cached_tokens": 1500
+            }
+        }
+    });
+
+    let anth_res = convert_openai_response_to_anthropic(openai_res, "claude-3-7-sonnet");
+    let usage = anth_res["usage"].clone();
+    assert_eq!(usage["input_tokens"], 500); // 2000 - 1500
+    assert_eq!(usage["output_tokens"], 100);
+    assert_eq!(usage["cache_read_input_tokens"], 1500);
+    assert_eq!(usage["cache_creation_input_tokens"], 0);
+}
+
+#[test]
+fn test_transform_to_google_body_no_antigravity_system_instruction() {
+    let req = json!({
+        "model": "gemini-3.7-flash",
+        "messages": [
+            { "role": "system", "content": "Custom system instruction" },
+            { "role": "user", "content": "Hello" }
+        ]
+    });
+
+    let transformed = transform_to_google_body(&req, "test-proj", false, None, false);
+    let sys_instr = transformed["request"]["system_instruction"].clone();
+    let text = sys_instr["parts"][0]["text"].as_str().unwrap();
+    assert_eq!(text, "Custom system instruction");
+    assert!(!text.contains("You are Antigravity"));
 }
 
 

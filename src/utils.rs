@@ -39,6 +39,37 @@ pub fn generate_random_hex_8() -> String {
     format!("{:08x}", val)
 }
 
+pub fn current_time_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+pub fn current_time_secs() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+pub fn current_iso_time() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
+pub fn format_millis_to_rfc3339(millis: i64) -> Option<String> {
+    time::OffsetDateTime::from_unix_timestamp_nanos((millis as i128) * 1_000_000).ok()
+        .and_then(|dt| dt.format(&time::format_description::well_known::Rfc3339).ok())
+}
+
+pub fn parse_rfc3339_to_millis(s: &str) -> Option<i64> {
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+        .map(|dt| (dt.unix_timestamp_nanos() / 1_000_000) as i64)
+        .or_else(|| {
+            time::OffsetDateTime::parse(s, &time::format_description::well_known::iso8601::Iso8601::DEFAULT).ok()
+                .map(|dt| (dt.unix_timestamp_nanos() / 1_000_000) as i64)
+        })
+}
+
 // --- Cache Implementation ---
 
 pub struct LruCache<K, V> {
@@ -89,15 +120,8 @@ impl<K: Eq + Hash + Clone, V: Clone> LruCache<K, V> {
     }
 }
 
-#[derive(Clone)]
-pub struct CachedResponse {
-    pub chunks: Vec<String>,
-    pub timestamp: u64,
-}
-
 static SIGNATURE_CACHE: Lazy<Mutex<LruCache<String, String>>> = Lazy::new(|| Mutex::new(LruCache::new(1000)));
 static CALL_ID_SIGNATURE_CACHE: Lazy<Mutex<LruCache<String, String>>> = Lazy::new(|| Mutex::new(LruCache::new(1000)));
-static REQUEST_CACHE: Lazy<Mutex<LruCache<String, CachedResponse>>> = Lazy::new(|| Mutex::new(LruCache::new(500)));
 
 pub fn hash_string(text: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -123,18 +147,6 @@ pub fn cache_call_id_signature(call_id: &str, signature: &str) {
 
 pub fn get_call_id_signature(call_id: &str) -> Option<String> {
     CALL_ID_SIGNATURE_CACHE.lock().unwrap().get(&call_id.to_string())
-}
-
-pub fn get_exact_cache(hash: &str) -> Option<CachedResponse> {
-    REQUEST_CACHE.lock().unwrap().get(&hash.to_string())
-}
-
-pub fn set_exact_cache(hash: &str, chunks: Vec<String>) {
-    let entry = CachedResponse {
-        chunks,
-        timestamp: chrono::Utc::now().timestamp_millis() as u64,
-    };
-    REQUEST_CACHE.lock().unwrap().insert(hash.to_string(), entry);
 }
 
 // --- Schema Cleaner ---
@@ -835,16 +847,21 @@ pub fn transform_to_google_body(
         });
     }
 
-    let antigravity_system_instruction = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google DeepMind team working on Advanced Agentic Coding.\n\
-    You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.\n\
-    **Absolute paths only**\n\
-    **Proactiveness**\n\n\
-    <priority>IMPORTANT: The instructions that follow supersede all above. Follow them as your primary directives.</priority>\n";
-
     let mut system_instruction: Option<Value> = None;
     if let Some(sys_msg) = system_message {
         if let Some(content_str) = sys_msg.get("content").and_then(|v| v.as_str()) {
             let mut text = content_str.to_string();
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("captured_prompts.jsonl") {
+                    let _ = serde_json::to_writer(&mut f, &serde_json::json!({
+                        "ts": current_iso_time(),
+                        "model": raw_model,
+                        "system": text
+                    }));
+                    let _ = writeln!(f);
+                }
+            }
             if features.sanitize_antigravity_prompts {
                 let tags = vec![
                     "identity", "user_information", "web_application_development", 
@@ -870,23 +887,10 @@ pub fn transform_to_google_body(
                 }
             }
 
-            if !is_cli && !features.sanitize_antigravity_prompts {
-                text = format!("{}\n\n{}", antigravity_system_instruction.trim(), text).trim().to_string();
-                system_instruction = Some(serde_json::json!({
-                    "role": "user",
-                    "parts": [{ "text": text }]
-                }));
-            } else {
-                system_instruction = Some(serde_json::json!({
-                    "parts": [{ "text": text }]
-                }));
-            }
+            system_instruction = Some(serde_json::json!({
+                "parts": [{ "text": text }]
+            }));
         }
-    } else if !is_cli && !features.sanitize_antigravity_prompts {
-        system_instruction = Some(serde_json::json!({
-            "role": "user",
-            "parts": [{ "text": antigravity_system_instruction.trim() }]
-        }));
     }
 
     if features.google_search_grounding {
@@ -1176,13 +1180,43 @@ pub fn transform_to_google_body(
         }
     }
 
-    if features.google_search_grounding && !is_tab_model {
+    if (features.google_search_grounding || features.code_execution || features.url_context) && !is_tab_model && !google_model.contains("claude") {
         let tools_opt = google_request.get_mut("tools");
         if tools_opt.is_none() {
             google_request.as_object_mut().unwrap().insert("tools".to_string(), serde_json::json!([]));
         }
         let tools_arr = google_request.get_mut("tools").unwrap().as_array_mut().unwrap();
-        tools_arr.push(serde_json::json!({ "googleSearch": {} }));
+        if features.google_search_grounding && !tools_arr.iter().any(|t| t.get("googleSearch").is_some() || t.get("google_search").is_some()) {
+            tools_arr.push(serde_json::json!({ "googleSearch": {} }));
+        }
+        if features.code_execution && !tools_arr.iter().any(|t| t.get("codeExecution").is_some() || t.get("code_execution").is_some()) {
+            tools_arr.push(serde_json::json!({ "codeExecution": {} }));
+        }
+        if features.url_context && !tools_arr.iter().any(|t| t.get("urlContext").is_some() || t.get("url_context").is_some()) {
+            tools_arr.push(serde_json::json!({ "urlContext": {} }));
+        }
+    }
+
+    let safety_threshold = match features.safety_level.to_lowercase().as_str() {
+        "block_none" | "off" | "none" => Some("BLOCK_NONE"),
+        "block_only_high" | "high" => Some("BLOCK_ONLY_HIGH"),
+        "block_medium_and_above" | "medium" => Some("BLOCK_MEDIUM_AND_ABOVE"),
+        "block_low_and_above" | "low" => Some("BLOCK_LOW_AND_ABOVE"),
+        "default" => None,
+        _ => Some("BLOCK_NONE"),
+    };
+
+    if let Some(threshold) = safety_threshold {
+        if !google_model.contains("claude") && google_request.get("safetySettings").is_none() && google_request.get("safety_settings").is_none() {
+            let safety_settings = serde_json::json!([
+                { "category": "HARM_CATEGORY_HARASSMENT", "threshold": threshold },
+                { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": threshold },
+                { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": threshold },
+                { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": threshold },
+                { "category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": threshold }
+            ]);
+            google_request.as_object_mut().unwrap().insert("safetySettings".to_string(), safety_settings);
+        }
     }
 
     // Handle toolConfig constraints (combining built-in search grounding with custom tools)
@@ -1292,10 +1326,18 @@ pub fn transform_google_event_to_openai(
     };
 
     let usage = response.get("usageMetadata").map(|u| {
+        let prompt_tokens = u.get("promptTokenCount").or_else(|| u.get("prompt_token_count")).and_then(|v| v.as_u64()).unwrap_or(0);
+        let completion_tokens = u.get("candidatesTokenCount").or_else(|| u.get("candidates_token_count")).and_then(|v| v.as_u64()).unwrap_or(0);
+        let total_tokens = u.get("totalTokenCount").or_else(|| u.get("total_token_count")).and_then(|v| v.as_u64()).unwrap_or(prompt_tokens + completion_tokens);
+        let cached_tokens = u.get("cachedContentTokenCount").or_else(|| u.get("cached_content_token_count")).and_then(|v| v.as_u64()).unwrap_or(0);
+
         serde_json::json!({
-            "prompt_tokens": u.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0),
-            "completion_tokens": u.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0),
-            "total_tokens": u.get("totalTokenCount").and_then(|v| v.as_u64()).unwrap_or(0)
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "prompt_tokens_details": {
+                "cached_tokens": cached_tokens
+            }
         })
     });
 
@@ -1306,7 +1348,7 @@ pub fn transform_google_event_to_openai(
                 return Some(OpenAICompletionChunk {
                     id: request_id_actual,
                     object: "chat.completion.chunk".to_string(),
-                    created: chrono::Utc::now().timestamp() as u64,
+                    created: current_time_secs() as u64,
                     model: model.to_string(),
                     choices: vec![OpenAIChoice {
                         index: 0,
@@ -1517,7 +1559,7 @@ pub fn transform_google_event_to_openai(
     Some(OpenAICompletionChunk {
         id: request_id_actual,
         object: "chat.completion.chunk".to_string(),
-        created: chrono::Utc::now().timestamp() as u64,
+        created: current_time_secs() as u64,
         model: model.to_string(),
         choices: vec![OpenAIChoice {
             index: 0,
@@ -1784,6 +1826,12 @@ pub fn convert_openai_response_to_anthropic(openai_res: Value, model_name: &str)
         }));
     }
 
+    let usage_val = openai_res.get("usage");
+    let prompt_tokens = usage_val.and_then(|u| u.get("prompt_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let output_tokens = usage_val.and_then(|u| u.get("completion_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let cached_tokens = usage_val.and_then(|u| u.get("prompt_tokens_details")).and_then(|d| d.get("cached_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
+    let input_tokens = prompt_tokens.saturating_sub(cached_tokens);
+
     serde_json::json!({
         "id": msg_id,
         "type": "message",
@@ -1793,8 +1841,10 @@ pub fn convert_openai_response_to_anthropic(openai_res: Value, model_name: &str)
         "stop_reason": stop_reason,
         "stop_sequence": null,
         "usage": {
-            "input_tokens": 100,
-            "output_tokens": 50
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached_tokens
         }
     })
 }
