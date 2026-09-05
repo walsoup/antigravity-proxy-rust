@@ -615,13 +615,17 @@ pub fn transform_to_google_body(
         } else if raw_model.contains("gpt-oss-120b") || base_model.contains("gpt-oss-120b") {
             google_model = "gpt-oss-120b-medium".to_string();
         } else if base_model.contains("gemini-3.8") {
-            let tier = adaptive_tier.as_deref().unwrap_or("high");
+            // Live-verified 2026-09-05 (sandbox): bare `gemini-3.8-flash` 404s;
+            // catalog lists `gemini-3.8-flash-tiered` (M322). Default to tiered.
+            let tier = adaptive_tier.as_deref().unwrap_or("tiered");
             if tier == "low" || tier == "none" || tier == "off" {
                 google_model = "gemini-3.8-flash-low".to_string();
             } else if tier == "medium" {
                 google_model = "gemini-3.8-flash-medium".to_string();
-            } else {
+            } else if tier == "high" {
                 google_model = "gemini-3.8-flash-high".to_string();
+            } else {
+                google_model = "gemini-3.8-flash-tiered".to_string();
             }
         } else if base_model.contains("gemini-3.7") {
             google_model = "gemini-3.7-flash-tiered".to_string();
@@ -645,6 +649,10 @@ pub fn transform_to_google_body(
             }
         } else if base_model.contains("gemini-3-pro") {
             google_model = "gemini-3-pro".to_string();
+        } else if base_model.contains("gemini-3.5-flash-lite") {
+            // Live-verified 2026-09-05 (sandbox catalog): M277. Must precede
+            // the general 3.5-flash branch or it gets remapped to -low.
+            google_model = "gemini-3.5-flash-lite".to_string();
         } else if base_model.contains("gemini-3.5-flash") {
             let tier = adaptive_tier.as_deref().unwrap_or("low");
             if tier == "xhigh" || tier == "high" {
@@ -853,6 +861,8 @@ pub fn transform_to_google_body(
             "low" => 8192,
             "medium" => 16000,
             "high" => 32768,
+            // Live-verified server ceiling: thinking_budget range is [-1, 65535].
+            "xhigh" | "max" => 65535,
             _ => 16000,
         });
     }
@@ -1095,7 +1105,13 @@ pub fn transform_to_google_body(
 
     let is_thinking_eligible = is_thinking_model || google_model.contains("gemini-3") || google_model.contains("agent") || google_model.contains("gemini-2.0-flash-thinking-exp");
 
-    if is_none_reasoning && (google_model.contains("gemini-3") || google_model.contains("thinking")) {
+    // Live-verified 2026-09-05: gemini-3.5-flash-lite (M277) 400s ONLY on
+    // thinkingBudget 0. Budgets 1..16000, -1, level-only, and budget+level
+    // combos all return 200 with visible thought traces. So never force 0:
+    // omit the key when reasoning is disabled, pass through otherwise.
+    let lite_no_disable = google_model == "gemini-3.5-flash-lite" && is_none_reasoning;
+
+    if is_none_reasoning && !lite_no_disable && (google_model.contains("gemini-3") || google_model.contains("thinking")) {
         // Explicitly force thinkingBudget: 0 to disable server-side reasoning for ultra-low latency
         let thinking_config = serde_json::json!({
             "thinkingBudget": 0
@@ -1111,7 +1127,7 @@ pub fn transform_to_google_body(
         if google_model.contains("gemini-3") {
             let raw_level = adaptive_tier.or(extracted_tier.map(|s| s.to_string()));
             let level = match raw_level.as_deref() {
-                Some("high") | Some("xhigh") => "high",
+                Some("high") | Some("xhigh") | Some("max") => "high",
                 Some("medium") => "medium",
                 Some("low") => "low",
                 _ => "low",
