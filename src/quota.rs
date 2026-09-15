@@ -399,3 +399,79 @@ pub async fn refresh_all_quotas() {
         }
     }
 }
+
+pub async fn scan_available_models(probe_candidates: bool) -> Vec<String> {
+    // 1. Refresh quotas across all accounts to populate models from fetchAvailableModels
+    refresh_all_quotas().await;
+
+    // 2. If probe_candidates is enabled, check candidate models against active accounts
+    if probe_candidates {
+        let accounts = get_accounts();
+        let usable: Vec<AntigravityAccount> = accounts.into_iter().filter(|a| !a.refresh_token.is_empty()).collect();
+        if let Some(acc) = usable.first() {
+            let candidates = vec![
+                "gemini-4-flash",
+                "gemini-4-pro",
+                "gemini-4.0-flash",
+                "gemini-4.0-pro",
+                "gemini-4.5-flash",
+                "gemini-4.5-pro",
+                "gemini-3.9-flash",
+                "gemini-3.9-pro",
+                "gemini-3.5-pro",
+                "gemini-4-flash-tiered",
+                "claude-sonnet-4-7",
+                "claude-opus-4-7",
+            ];
+
+            let config = get_proxy_config();
+            let ep = config.endpoints.sandbox.first().cloned()
+                .unwrap_or_else(|| "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent".to_string());
+            let project_id = acc.project_id.clone().unwrap_or_default();
+            let mut acc_copy = acc.clone();
+            let _ = crate::auth::ensure_fingerprint(&mut acc_copy);
+            let fp = acc_copy.fingerprint.clone().unwrap_or_default();
+
+            for candidate in candidates {
+                if SUPPORTED_MODELS_CACHE.read().unwrap().contains(candidate) {
+                    continue;
+                }
+
+                let dummy_req = serde_json::json!({
+                    "model": candidate,
+                    "messages": [{ "role": "user", "content": "ping" }]
+                });
+                let google_body = crate::utils::transform_to_google_body(&dummy_req, &project_id, false, None, false);
+                let target_model = google_body.get("model").and_then(|v| v.as_str()).unwrap_or(candidate);
+                let headers = crate::auth::get_impersonation_headers_builder(acc.access_token.as_deref().unwrap_or(""), &fp, Some(target_model), None);
+
+                let res = crate::utils::HTTP_CLIENT.post(&ep)
+                    .headers(headers)
+                    .json(&google_body)
+                    .timeout(std::time::Duration::from_secs(3))
+                    .send()
+                    .await;
+
+                if let Ok(resp) = res {
+                    let status = resp.status().as_u16();
+                    if status == 200 || status == 429 {
+                        println!("[ModelScanner] Discovered live candidate model: {}", candidate);
+                        SUPPORTED_MODELS_CACHE.write().unwrap().insert(candidate.to_string());
+                    } else if status == 400 || status == 403 {
+                        if let Ok(text) = resp.text().await {
+                            let text_lower = text.to_lowercase();
+                            if !text_lower.contains("not found") && !text_lower.contains("does not exist") && !text_lower.contains("unsupported") {
+                                println!("[ModelScanner] Candidate model recognized: {}", candidate);
+                                SUPPORTED_MODELS_CACHE.write().unwrap().insert(candidate.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut models: Vec<String> = SUPPORTED_MODELS_CACHE.read().unwrap().iter().cloned().collect();
+    models.sort();
+    models
+}

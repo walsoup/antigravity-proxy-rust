@@ -314,7 +314,7 @@
                     <!-- Model Clusters Grid -->
                     <div>
                         <div class="text-xs font-mono font-bold text-on-surface-variant uppercase tracking-wider mb-3">Model Clusters</div>
-                        <div id="family-cards" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div id="family-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <!-- Injected by JS -->
                         </div>
                     </div>
@@ -369,6 +369,9 @@
                                 <a href="/oauth/start" class="w-full sm:w-auto bg-primary-fixed-dim text-slate-950 font-bold px-4 py-2 rounded-2xl text-xs flex items-center justify-center gap-1.5 hover:bg-primary-fixed transition-all duration-200 active:scale-95 shadow-md shadow-primary-fixed-dim/10">
                                     <span class="material-symbols-outlined text-sm font-bold">add</span> Add Account
                                 </a>
+                                <button id="scan-models-btn" class="w-full sm:w-auto bg-primary-fixed-dim/15 text-primary-fixed-dim hover:bg-primary-fixed-dim/25 border border-primary-fixed-dim/30 px-4 py-2 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors active:scale-95" onclick="scanModels()">
+                                    <span class="material-symbols-outlined text-sm">radar</span> Scan Models
+                                </button>
                                 <button class="w-full sm:w-auto bg-secondary-container text-on-secondary-container px-4 py-2 rounded-2xl text-xs font-semibold border border-outline-variant/40 hover:bg-secondary-fixed-dim transition-colors active:scale-95" onclick="manualOauthCallback()">
                                     Paste Callback URL
                                 </button>
@@ -532,33 +535,21 @@ export ANTHROPIC_API_KEY="antigravity"
         "baseURL": "http://localhost:3000/v1"
       },
       "models": {
-        "gemini-3.8-flash": {
-          "name": "Gemini 3.8 flash",
+        "antigravity-auto": {
+          "name": "Antigravity Auto Routing",
           "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "reasoning": true
         },
-        "gemini-3.7-flash": {
-          "name": "Gemini 3.7 flash",
+        "gemini-flash": {
+          "name": "Gemini Flash",
           "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "reasoning": true
         },
-        "gemini-3.6-flash": {
-          "name": "Gemini 3.6 flash",
+        "gemini-pro": {
+          "name": "Gemini Pro",
           "limit": { "context": 1048576, "output": 65536 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "reasoning": true
-        },
-        "gemini-3.5-flash": {
-          "name": "Gemini 3.5 flash",
-          "limit": { "context": 1048576, "output": 65536 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "reasoning": true
-        },
-        "gemini-3.1-pro": {
-          "name": "Gemini 3.1 pro",
-          "limit": { "context": 1048576, "output": 65535 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "reasoning": true
         },
@@ -578,23 +569,6 @@ export ANTHROPIC_API_KEY="antigravity"
           "name": "GPT OSS 120B",
           "limit": { "context": 131072, "output": 32768 },
           "modalities": { "input": ["text"], "output": ["text"] },
-          "reasoning": true
-        },
-        "gemini-3.1-flash-lite": {
-          "name": "Gemini 3.1 flash lite",
-          "limit": { "context": 1048576, "output": 65535 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] }
-        },
-        "gemini-2.5-pro": {
-          "name": "Gemini 2.5 pro",
-          "limit": { "context": 1048576, "output": 65535 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "reasoning": true
-        },
-        "antigravity-auto": {
-          "name": "Antigravity Auto Routing",
-          "limit": { "context": 1048576, "output": 65536 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] },
           "reasoning": true
         }
       }
@@ -619,23 +593,14 @@ export ANTHROPIC_API_KEY="antigravity"
                                 <pre class="bg-surface-container-lowest border border-outline-variant/20 p-4 rounded-2xl font-mono text-xs text-on-surface overflow-x-auto" id="openai-config">Base URL: http://localhost:3000/v1
 API Key: antigravity (or any string)
 
-Models available:
-- antigravity-auto
-- gemini-3.8-flash
-- gemini-3.8-flash-high / medium / low
-- gemini-3.7-flash
-- gemini-3.7-flash-high / medium / low / tiered
-- gemini-3.6-flash
-- gemini-3.6-flash-high / medium / low / tiered
-- gemini-3.5-flash / high
-- gemini-3-flash / agent
-- gemini-3.1-flash-lite / image / pro
-- gemini-pro-agent
-- gemini-2.5-flash / lite / pro
-- claude-opus-4-6-thinking
+Models available (query GET /v1/models for full dynamic catalog):
+- antigravity-auto (auto-routes simple/complex tasks)
+- gemini-flash (standard, high, tiered)
+- gemini-pro (agent)
 - claude-sonnet-4-6
+- claude-opus-4-6-thinking
 - gpt-oss-120b-medium
-- proactive-observer / m50</pre>
+- All live & emerging Gemini models (automatically discovered via scan)</pre>
                             </div>
                         </div>
                     </div>

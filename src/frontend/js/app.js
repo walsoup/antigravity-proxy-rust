@@ -285,9 +285,7 @@ let evtSource = null;
 const expandedAccounts = new Set();
 
 const MODEL_FAMILIES = {
-    'Gemini 3 Flash': (n) => n.includes('gemini') && (n.includes('flash') || n.includes('1.5 flash')) && !n.includes('2.5'),
-    'Gemini 3 Pro': (n) => (n.includes('gemini') && (n.includes('pro') || n.includes('1.5 pro')) || n.includes('image')) && !n.includes('2.5'),
-    'Gemini 2.5': (n) => n.includes('2.5'),
+    'Gemini': (n) => n.includes('gemini'),
     'Claude/GPT': (n) => n.includes('claude') || n.includes('gpt'),
 };
 
@@ -331,7 +329,7 @@ function calculateFamilies() {
             });
         } else {
             // Default check by account type if no quota info is loaded yet
-            const fam = acc.type === 'claude' ? 'Claude/GPT' : 'Gemini 3 Flash';
+            const fam = acc.type === 'claude' ? 'Claude/GPT' : 'Gemini';
             if (families[fam]) {
                 families[fam].total++;
                 if (isHealthy) families[fam].available++;
@@ -601,32 +599,56 @@ function renderDashboard() {
             allocationCardsHtml = '<div class="text-on-surface-variant text-xs italic py-4 col-span-2">No allocations loaded. Make a request to sync quotas.</div>';
         } else {
             details.forEach(([cat, quotas]) => {
-                const best = Math.round(Math.max(...quotas.map(q => q.remainingFraction * 100)));
                 const isSandboxDown = acc.cooldowns && acc.cooldowns[`sandbox|${cat}`] > Date.now();
                 const isCliDown = acc.cooldowns && acc.cooldowns[`cli|${cat}`] > Date.now();
                 
-                let barColor = '#38e5a6';
-                if (best < 20) barColor = '#ffb4ab';
-                else if (best < 50) barColor = '#f59e0b';
+                let quotaBarsHtml = quotas.map((q, idx) => {
+                    const pct = Math.round(q.remainingFraction * 100);
+                    let barColor = '#38e5a6';
+                    if (pct < 20) barColor = '#ffb4ab';
+                    else if (pct < 50) barColor = '#f59e0b';
+                    
+                    let windowLabel = '';
+                    if (q.limitName && !q.limitName.toLowerCase().includes('unknown')) {
+                        windowLabel = q.limitName;
+                    } else if (quotas.length > 1) {
+                        windowLabel = `Quota Window ${idx + 1}`;
+                    }
+                    const resetInfo = q.resetIn ? `Resets in ${q.resetIn}` : '';
+
+                    return `
+                        <div class="flex flex-col gap-1 mt-1">
+                            <div class="flex justify-between items-center text-[11px]">
+                                <span class="text-on-surface-variant font-mono text-[10px]">${escapeHTML(windowLabel)}</span>
+                                <div class="flex items-center gap-2">
+                                    ${resetInfo ? `<span class="text-[10px] text-primary-fixed-dim font-mono">${escapeHTML(resetInfo)}</span>` : ''}
+                                    <span class="font-bold font-mono text-xs" style="color: ${barColor}">${pct}%</span>
+                                </div>
+                            </div>
+                            <div class="w-full h-1.5 bg-surface-container-lowest rounded-full overflow-hidden">
+                                <div class="h-full rounded-full transition-all duration-300" style="width: ${pct}%; background: ${barColor}"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
                 
                 allocationCardsHtml += `
                     <div class="bg-surface-container-low/60 p-4 rounded-2xl border border-outline-variant/20 flex flex-col gap-2 shadow-inner">
                         <div class="flex justify-between items-center">
-                            <span class="font-bold text-on-surface text-xs">${cat}</span>
-                            <span class="text-xs font-bold" style="color: ${barColor}">${best}%</span>
-                        </div>
-                        <div class="w-full h-1.5 bg-surface-container-lowest rounded-full overflow-hidden">
-                            <div class="h-full rounded-full transition-all duration-300" style="width: ${best}%; background: ${barColor}"></div>
-                        </div>
-                        <div class="flex justify-between mt-1">
-                            <div class="flex items-center gap-1.5 text-[10px] font-mono text-on-surface-variant">
-                                <span class="w-2 h-2 rounded-full ${isSandboxDown ? 'bg-error' : 'bg-secondary'}"></span>
-                                <span>SBX</span>
+                            <span class="font-bold text-on-surface text-sm">${cat}</span>
+                            <div class="flex items-center gap-2">
+                                <div class="flex items-center gap-1.5 text-[10px] font-mono text-on-surface-variant">
+                                    <span class="w-2 h-2 rounded-full ${isSandboxDown ? 'bg-error' : 'bg-secondary'}"></span>
+                                    <span>SBX</span>
+                                </div>
+                                <div class="flex items-center gap-1.5 text-[10px] font-mono text-on-surface-variant">
+                                    <span class="w-2 h-2 rounded-full ${isCliDown ? 'bg-error' : 'bg-secondary'}"></span>
+                                    <span>CLI</span>
+                                </div>
                             </div>
-                            <div class="flex items-center gap-1.5 text-[10px] font-mono text-on-surface-variant">
-                                <span class="w-2 h-2 rounded-full ${isCliDown ? 'bg-error' : 'bg-secondary'}"></span>
-                                <span>CLI</span>
-                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            ${quotaBarsHtml}
                         </div>
                     </div>
                 `;
@@ -771,6 +793,32 @@ async function purgeSystemState() {
     } catch (e) {
         addLog(`Purge failed: ${e.message}`, 'error');
         showToast(`Purge failed: ${e.message}`, true);
+    }
+}
+
+async function scanModels() {
+    const btn = document.getElementById('scan-models-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+    }
+    try {
+        addLog('Initiating model scan across accounts and upstream endpoints...', 'info');
+        showToast('Scanning for active & candidate models...');
+        const res = await apiFetch('/api/models/scan', { method: 'POST' });
+        const data = await res.json();
+        const count = data.count || (data.models ? data.models.length : 0);
+        addLog(`Model scan completed: ${count} models currently supported.`, 'info');
+        showToast(`Model scan complete (${count} models found)`);
+        await loadPlaygroundModels();
+    } catch (e) {
+        addLog(`Model scan failed: ${e.message}`, 'error');
+        showToast(`Model scan failed: ${e.message}`, true);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+        }
     }
 }
 

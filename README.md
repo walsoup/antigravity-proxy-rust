@@ -66,45 +66,36 @@ PORT=3000 PROXY_PASSWORD="your_password" cargo run
 PORT=3000 PROXY_PASSWORD="your_password" cargo run --release
 ```
 
+### Scan & Discover Models
+```bash
+cargo run --release -- --scan-models
+```
+
 The admin interface will be available at `http://localhost:3000/frontend/`.
 
-## 🤖 Supported Models
+---
 
-The proxy exposes OpenAI-compatible models via `/v1/models`. Below is the complete list of supported model IDs:
+## 🤖 Supported Models & Families
 
-### 🌟 Auto-Routing & Default Models
+The proxy dynamically discovers and exposes models via `/v1/models` from upstream accounts. Quotas and cooldowns are unified into modern families:
+
+### 🌟 Unified Model Families
+*   **Gemini** - Unified rolling 5-hour and weekly quota for all Gemini models (Flash, Pro, Lite, tiered reasoning variants).
+*   **Claude/GPT** - Unified quota for Claude Opus, Sonnet, and GPT models.
+
+### 🎯 Key Models & Aliases
 *   `antigravity-auto` - Dynamic smart router (autonomously selects optimal model based on query complexity)
-*   `gemini-3.8-flash` - Gemini 3.8 Flash (Standard)
-*   `gemini-3.8-flash-high` - Gemini 3.8 Flash (High Tier)
-*   `gemini-3.8-flash-medium` - Gemini 3.8 Flash (Medium Tier)
-*   `gemini-3.8-flash-low` - Gemini 3.8 Flash (Low Tier)
-*   `gemini-3.7-flash` - Gemini 3.7 Flash (Standard)
-*   `gemini-3.7-flash-high` - Gemini 3.7 Flash (High Tier)
-*   `gemini-3.7-flash-medium` - Gemini 3.7 Flash (Medium Tier)
-*   `gemini-3.7-flash-low` - Gemini 3.7 Flash (Low Tier)
-*   `gemini-3.7-flash-tiered` - Gemini 3.7 Flash (Adaptive Tiered)
-*   `gemini-3.6-flash` - Gemini 3.6 Flash (Standard)
-*   `gemini-3.6-flash-high` - Gemini 3.6 Flash (High Tier)
-*   `gemini-3.6-flash-medium` - Gemini 3.6 Flash (Medium Tier)
-*   `gemini-3.6-flash-low` - Gemini 3.6 Flash (Low Tier)
-*   `gemini-3.6-flash-tiered` - Gemini 3.6 Flash (Adaptive Tiered)
-*   `gemini-3.5-flash` - Gemini 3.5 Flash
-*   `gemini-3.5-flash-high` - Gemini 3.5 Flash (High Tier)
-*   `gemini-3-flash` - Gemini 3 Flash
-*   `gemini-3-flash-agent` - Gemini 3 Flash Agent
-*   `gemini-3.1-flash-lite` - Gemini 3.1 Flash Lite
-*   `gemini-3.1-flash-image` - Gemini 3.1 Flash Image
-*   `gemini-3.1-pro` - Gemini 3.1 Pro
-*   `gemini-pro-agent` - Gemini Pro Agent
-*   `gemini-2.5-flash` - Gemini 2.5 Flash
-*   `gemini-2.5-flash-lite` - Gemini 2.5 Flash Lite
-*   `gemini-2.5-pro` - Gemini 2.5 Pro
+*   `gemini-flash` - Gemini Flash family (supports adaptive reasoning tiers: `-high`, `-medium`, `-low`, `-tiered`)
+*   `gemini-pro` / `gemini-pro-agent` - Gemini Pro family
+*   `claude-opus-4-6-thinking` - Claude Opus 4.6 Thinking
+*   `claude-sonnet-4-6` - Claude Sonnet 4.6
+*   `gpt-oss-120b-medium` - GPT OSS 120B Medium
+*   *All live and canary models discovered automatically via `--scan-models` or the dashboard scanner.*
 
 ### 🧠 Claude & Other Family Aliases
 *   `claude-opus-4-6-thinking` - Claude Opus 4.6 Thinking
 *   `claude-sonnet-4-6` - Claude Sonnet 4.6
 *   `gpt-oss-120b-medium` - GPT OSS 120B Medium
-*   `proactive-observer` - Proactive Observer
 *   `m50` - M50
 
 ### 🔮 Obscured & Special Model Endpoints

@@ -720,7 +720,7 @@ pub fn transform_to_google_body(
 
             if google_model.contains("claude") {
                 func_resp.as_object_mut().unwrap().insert("id".to_string(), Value::String(tool_call_id));
-            } else if google_model.contains("gemini-3") || google_model.contains("gemini-pro-agent") || google_model.contains("flash_lite_preview") {
+            } else if google_model.contains("gemini") || google_model.contains("flash_lite_preview") {
                 let original_id = msg.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 func_resp.as_object_mut().unwrap().insert("id".to_string(), Value::String(original_id));
             }
@@ -1090,7 +1090,7 @@ pub fn transform_to_google_body(
             64000
         } else if google_model.contains("gpt-oss-120b") {
             32768
-        } else if google_model.contains("lite") || google_model.contains("gemini-2.5") || google_model == "m50" {
+        } else if google_model.contains("lite") || google_model == "m50" {
             65535
         } else {
             65536
@@ -1157,7 +1157,7 @@ pub fn transform_to_google_body(
         thinking_budget == Some(0) ||
         openai_body.get("thinking").and_then(|t| t.get("type")).and_then(|v| v.as_str()) == Some("disabled");
 
-    let is_thinking_eligible = is_thinking_model || google_model.contains("gemini-3") || google_model.contains("agent") || google_model.contains("gemini-2.0-flash-thinking-exp");
+    let is_thinking_eligible = is_thinking_model || google_model.contains("gemini") || google_model.contains("agent") || google_model.contains("thinking");
 
     // Live-verified 2026-09-07 on gemini-3.5-flash-lite (M277, sandbox):
     // bare thinkingBudget 0 -> 400 INVALID_ARGUMENT, but budget 0 WITH a
@@ -1167,7 +1167,7 @@ pub fn transform_to_google_body(
     // so omit is the true reasoning-off for lite. Never send bare 0.
     let lite_no_disable = google_model == "gemini-3.5-flash-lite" && is_none_reasoning;
 
-    if is_none_reasoning && !lite_no_disable && (google_model.contains("gemini-3") || google_model.contains("thinking")) {
+    if is_none_reasoning && !lite_no_disable && (google_model.contains("gemini") || google_model.contains("thinking")) {
         // Explicitly force thinkingBudget: 0 to disable server-side reasoning for ultra-low latency
         let thinking_config = serde_json::json!({
             "thinkingBudget": 0
@@ -1181,7 +1181,7 @@ pub fn transform_to_google_body(
             "thinkingBudget": budget,
             "includeThoughts": true
         });
-        if google_model.contains("gemini-3") {
+        if google_model.contains("gemini") && !google_model.contains("agent") {
             let raw_level = adaptive_tier.or(extracted_tier.map(|s| s.to_string()));
             let level = match raw_level.as_deref() {
                 Some("high") | Some("xhigh") | Some("max") => "high",

@@ -34,7 +34,7 @@ use antigravity_proxy_rust::auth::{
     emit_event, ManagerEvent, AntigravityAccount, get_cooldowns, get_family_name,
     EVENT_SENDER,
 };
-use antigravity_proxy_rust::quota::{fetch_quota, refresh_all_quotas, SUPPORTED_MODELS_CACHE};
+use antigravity_proxy_rust::quota::{fetch_quota, refresh_all_quotas, scan_available_models, SUPPORTED_MODELS_CACHE};
 use antigravity_proxy_rust::utils::{
     transform_to_google_body, transform_google_event_to_openai, detect_loop,
     parse_google_error, cache_signature, cache_call_id_signature,
@@ -122,6 +122,14 @@ async fn main() {
     
     // Run initial quota refresh
     let _ = refresh_all_quotas().await;
+
+    // Check for CLI model scanner flag
+    let scan_flag = std::env::args().any(|arg| arg == "--scan-models" || arg == "--scan");
+    if scan_flag {
+        log_info!("[CLI] --scan-models flag detected. Scanning for active and candidate models...");
+        let scanned = scan_available_models(true).await;
+        log_info!("[CLI] Model scan complete. {} models available: {:?}", scanned.len(), scanned);
+    }
     
     // Set up background timers for quota refreshing and clearing capabilities
     tokio::spawn(async {
@@ -169,6 +177,7 @@ async fn main() {
         .route("/api/status", get(api_status_handler))
         .route("/api/strategy", post(api_strategy_handler))
         .route("/api/config", get(api_config_get_handler).post(api_config_post_handler))
+        .route("/api/models/scan", post(api_models_scan_handler))
         .route("/api/accounts/clear-capabilities", post(api_clear_capabilities_handler))
         .route("/api/accounts/reset-all", post(api_reset_all_handler))
         .route("/api/accounts/purge-state", post(api_purge_state_handler))
@@ -448,8 +457,7 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
 
         let supports_thinking = is_claude || is_gpt ||
             lower.contains("thinking") ||
-            lower.contains("gemini-3") ||
-            lower.contains("gemini-2.5-pro") ||
+            lower.contains("gemini") ||
             lower.contains("agent") ||
             lower == "antigravity-auto";
 
@@ -701,6 +709,20 @@ async fn api_config_post_handler(
         Ok(conf) => (StatusCode::OK, Json(conf)).into_response(),
         Err(err) => (StatusCode::BAD_REQUEST, err).into_response(),
     }
+}
+
+async fn api_models_scan_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
+    if let Err(e) = check_admin_auth(&headers, &query).await {
+        return Response::builder().status(e.0).body(Body::from(serde_json::to_string(&e.1).unwrap())).unwrap().into_response();
+    }
+    log_info!("[API] Model scan triggered. Discovering active and candidate models...");
+    let models = scan_available_models(true).await;
+    log_info!("[API] Model scan complete: {} models found", models.len());
+    Json(serde_json::json!({
+        "success": true,
+        "models": models,
+        "count": models.len()
+    })).into_response()
 }
 
 async fn api_clear_capabilities_handler(headers: HeaderMap, Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
@@ -1511,10 +1533,10 @@ async fn handle_chat_completion_internal(
                             continue;
                         } else if parsed_err.is_model_unsupported && !use_cli_pool {
                             let clean_model = model_name.replace("antigravity-", "");
-                            let known_models = vec![
-                                "claude-sonnet-4-5", "claude-opus-4-6-thinking", "gemini-3-flash", "gemini-3.1-pro", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.1-flash"
-                            ];
-                            let is_known = known_models.iter().any(|m| clean_model.starts_with(m)) || clean_model == "gemini-pro-agent";
+                            let is_known = clean_model.starts_with("gemini-") ||
+                                clean_model.starts_with("claude-") ||
+                                clean_model.starts_with("gpt-") ||
+                                clean_model == "antigravity-auto";
                             if !is_known {
                                 log_info!("[Model] Unsupported model {} for {}, marking capability.", model_name, acc.email);
                                 flag_model_unsupported(&acc.email, &model_name);

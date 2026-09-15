@@ -450,3 +450,29 @@ fn test_max_output_tokens_ceiling_clamping() {
     let google_req = transform_to_google_body(&comp_body, "test-project", false, None, false);
     assert_eq!(google_req["request"]["generationConfig"]["maxOutputTokens"], 65535);
 }
+
+#[test]
+fn test_future_gemini_4_model_resolution_and_thinking() {
+    let body = json!({
+        "model": "gemini-4-flash",
+        "messages": [{ "role": "user", "content": "Hello future" }]
+    });
+    let google_req = transform_to_google_body(&body, "test-project", false, None, false);
+    assert_eq!(google_req["model"], "gemini-4-flash");
+    
+    // Future gemini models must automatically receive thinkingConfig
+    let thinking_config = &google_req["request"]["generationConfig"]["thinkingConfig"];
+    assert!(thinking_config.get("thinkingBudget").is_some());
+    assert_eq!(thinking_config["thinkingLevel"], "low");
+
+    // Explicit reasoning effort on future models
+    let high_body = json!({
+        "model": "gemini-4-pro",
+        "reasoning_effort": "high",
+        "messages": [{ "role": "user", "content": "Think deep" }]
+    });
+    let google_req_high = transform_to_google_body(&high_body, "test-project", false, None, false);
+    assert_eq!(google_req_high["model"], "gemini-4-pro");
+    assert_eq!(google_req_high["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], "high");
+    assert_eq!(google_req_high["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 32768);
+}

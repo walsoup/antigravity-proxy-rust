@@ -484,12 +484,8 @@ pub fn emit_account_flash(email: &str, status: &str) {
 
 pub fn get_family_name(model_name: &str) -> String {
     let n = model_name.to_lowercase();
-    if n.contains("gemini") && n.contains("flash") && !n.contains("2.5") {
-        "Gemini 3 Flash".to_string()
-    } else if n.contains("gemini") && (n.contains("pro") || n.contains("image")) && !n.contains("2.5") {
-        "Gemini 3 Pro".to_string()
-    } else if n.contains("2.5") {
-        "Gemini 2.5".to_string()
+    if n.contains("gemini") {
+        "Gemini".to_string()
     } else if n.contains("claude") || n.contains("gpt") {
         "Claude/GPT".to_string()
     } else {
@@ -1391,4 +1387,23 @@ pub fn get_gemini_cli_headers_builder(
     );
 
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_family_name_generalization() {
+        assert_eq!(get_family_name("gemini-3.8-flash"), "Gemini");
+        assert_eq!(get_family_name("gemini-4-flash"), "Gemini");
+        assert_eq!(get_family_name("gemini-4-pro"), "Gemini");
+        assert_eq!(get_family_name("gemini-flash"), "Gemini");
+        assert_eq!(get_family_name("gemini-3.1-pro"), "Gemini");
+        assert_eq!(get_family_name("gemini-2.5-pro"), "Gemini");
+        assert_eq!(get_family_name("claude-sonnet-4-6"), "Claude/GPT");
+        assert_eq!(get_family_name("claude-opus-4-6-thinking"), "Claude/GPT");
+        assert_eq!(get_family_name("gpt-oss-120b-medium"), "Claude/GPT");
+        assert_eq!(get_family_name("some-custom-model"), "Other");
+    }
 }
