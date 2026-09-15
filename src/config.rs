@@ -153,6 +153,7 @@ pub struct FeaturesConfig {
     pub code_execution: bool,
     pub url_context: bool,
     pub capture_dataset: bool,
+    pub deep_reasoning_booster: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -275,6 +276,7 @@ impl Default for ProxyConfig {
                 code_execution: false,
                 url_context: false,
                 capture_dataset: false,
+                deep_reasoning_booster: true,
             },
             scheduling: SchedulingConfig {
                 mode: "balance".to_string(),

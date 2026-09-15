@@ -374,6 +374,8 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
     let default_models = vec![
         "gemini-3.8-flash",
         "gemini-3.8-flash-tiered",
+        "gemini-3.8-flash-max",
+        "gemini-3.8-flash-xhigh",
         "gemini-3.8-flash-high",
         "gemini-3.8-flash-medium",
         "gemini-3.8-flash-low",

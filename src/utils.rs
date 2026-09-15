@@ -556,6 +556,7 @@ pub fn transform_to_google_body(
         else if raw_model.ends_with("-medium") { Some("medium") }
         else if raw_model.ends_with("-high") { Some("high") }
         else if raw_model.ends_with("-xhigh") { Some("xhigh") }
+        else if raw_model.ends_with("-max") { Some("max") }
         else if raw_model.ends_with("-tiered") { Some("tiered") }
         else { None };
 
@@ -622,7 +623,7 @@ pub fn transform_to_google_body(
                 google_model = "gemini-3.8-flash-low".to_string();
             } else if tier == "medium" {
                 google_model = "gemini-3.8-flash-medium".to_string();
-            } else if tier == "high" {
+            } else if tier == "high" || tier == "xhigh" || tier == "max" {
                 google_model = "gemini-3.8-flash-high".to_string();
             } else {
                 google_model = "gemini-3.8-flash-tiered".to_string();
@@ -638,11 +639,13 @@ pub fn transform_to_google_body(
             } else if tier == "tiered" {
                 google_model = "gemini-3.6-flash-tiered".to_string();
             } else {
+                // high, xhigh, max (and default): xhigh/max extend native
+                // high via thinkingBudget, same top variant.
                 google_model = "gemini-3.6-flash-high".to_string();
             }
         } else if base_model.contains("gemini-3.1-pro") {
             let tier = adaptive_tier.as_deref().unwrap_or("low");
-            if tier == "xhigh" || tier == "high" {
+            if tier == "xhigh" || tier == "high" || tier == "max" {
                 google_model = "gemini-pro-agent".to_string();
             } else {
                 google_model = "gemini-3.1-pro-low".to_string();
@@ -655,7 +658,7 @@ pub fn transform_to_google_body(
             google_model = "gemini-3.5-flash-lite".to_string();
         } else if base_model.contains("gemini-3.5-flash") {
             let tier = adaptive_tier.as_deref().unwrap_or("low");
-            if tier == "xhigh" || tier == "high" {
+            if tier == "xhigh" || tier == "high" || tier == "max" {
                 google_model = "gemini-3-flash-agent".to_string();
             } else if tier == "none" || tier == "extra-low" {
                 google_model = "gemini-3.5-flash-extra-low".to_string();
@@ -737,8 +740,7 @@ pub fn transform_to_google_body(
                         });
                         if !session_uuid.is_empty() {
                             if let Some(sig) = get_signature(session_uuid, thought) {
-                                thought_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(sig.clone()));
-                                thought_part.as_object_mut().unwrap().insert("thought_signature".to_string(), Value::String(sig));
+                                thought_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(sig));
                             }
                         }
                         parts.push(thought_part);
@@ -827,8 +829,7 @@ pub fn transform_to_google_body(
                             "skip_thought_signature_validator".to_string()
                         };
 
-                        func_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(final_sig.clone()));
-                        func_part.as_object_mut().unwrap().insert("thought_signature".to_string(), Value::String(final_sig));
+                        func_part.as_object_mut().unwrap().insert("thoughtSignature".to_string(), Value::String(final_sig));
 
                         parts.push(func_part);
                     }
@@ -846,14 +847,18 @@ pub fn transform_to_google_body(
         }));
     }
 
-    let is_thinking_model = raw_model.contains("-thinking") || openai_body.get("reasoning_effort").is_some();
+    let is_thinking_model = raw_model.contains("-thinking")
+        || raw_model.ends_with("-high")
+        || raw_model.ends_with("-xhigh")
+        || raw_model.ends_with("-max")
+        || openai_body.get("reasoning_effort").is_some();
     let has_explicit_budget = openai_body.get("thinking_budget").is_some() ||
         openai_body.get("thinking").and_then(|t| t.get("budget_tokens")).is_some() ||
         openai_body.get("providerOptions").and_then(|p| p.get("thinkingBudget")).is_some();
 
-    let mut thinking_budget = openai_body.get("thinking_budget").and_then(|v| v.as_u64())
-        .or_else(|| openai_body.get("thinking").and_then(|t| t.get("budget_tokens")).and_then(|v| v.as_u64()))
-        .or_else(|| openai_body.get("providerOptions").and_then(|p| p.get("thinkingBudget")).and_then(|v| v.as_u64()));
+    let mut thinking_budget = openai_body.get("thinking_budget").and_then(|v| v.as_i64())
+        .or_else(|| openai_body.get("thinking").and_then(|t| t.get("budget_tokens")).and_then(|v| v.as_i64()))
+        .or_else(|| openai_body.get("providerOptions").and_then(|p| p.get("thinkingBudget")).and_then(|v| v.as_i64()));
 
     if thinking_budget.is_none() && is_thinking_model {
         let tier = adaptive_tier.as_deref().unwrap_or("low");
@@ -862,7 +867,10 @@ pub fn transform_to_google_body(
             "medium" => 16000,
             "high" => 32768,
             // Live-verified server ceiling: thinking_budget range is [-1, 65535].
-            "xhigh" | "max" => 65535,
+            // xhigh/max deliberately sit BELOW the ceiling (1.5x high): a live
+            // A/B (2026-09-07, coding task) showed ceiling-budget xhigh losing
+            // to high, consistent with overthinking drift at max budget.
+            "xhigh" | "max" => 49152,
             _ => 16000,
         });
     }
@@ -916,6 +924,35 @@ pub fn transform_to_google_body(
         } else {
             system_instruction = Some(serde_json::json!({
                 "parts": [{ "text": search_instruction }]
+            }));
+        }
+    }
+
+    // NOTE (2026-09-07/08): xhigh/max extend native high via thinkingBudget
+    // AND a strong reasoning directive. Live A/B showed budget alone does
+    // NOT induce more thinking (49k budget thought LESS than 32k on the same
+    // task: budget is a cap, not a target) and thinkingLevel is already maxed
+    // at "high", so the prompt is the only remaining lever. Live-measured on
+    // lite (same 32k+high): none 1366 / minimal-nudge 1025 / this directive
+    // 2701 thought chars on a reasoning prompt; coding task 17.0k -> 20.7k
+    // thoughts with 8/8 hidden tests passing under every variant. The
+    // "keep deliberation internal + obey output format" lines are load-bearing:
+    // without them the deliberation leaks into the visible answer.
+    let is_max_reasoning = adaptive_tier.as_deref() == Some("max") || adaptive_tier.as_deref() == Some("xhigh");
+    if features.deep_reasoning_booster && is_max_reasoning {
+        let reasoning_directive = "[REASONING DEPTH: MAXIMUM] Do not answer right away. Do all of the following deliberation internally, in your thinking — keep it out of your visible response. First restate the problem in your own words and pinpoint the hardest parts. Then develop at least two distinct approaches, working through each one step by step. Compare their trade-offs, stress-test the most promising approach against edge cases and counterexamples, and re-verify every intermediate result. Only after this deliberation, write your final answer, strictly obeying any requested output format. Thoroughness matters far more than speed.";
+        if let Some(sys) = &mut system_instruction {
+            if let Some(parts) = sys.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                if !parts.is_empty() {
+                    if let Some(txt) = parts[0].get_mut("text").and_then(|t| t.as_str()) {
+                        let new_txt = format!("{}\n\n{}", txt, reasoning_directive);
+                        parts[0] = serde_json::json!({ "text": new_txt });
+                    }
+                }
+            }
+        } else {
+            system_instruction = Some(serde_json::json!({
+                "parts": [{ "text": reasoning_directive }]
             }));
         }
     }
@@ -1041,15 +1078,32 @@ pub fn transform_to_google_body(
         }
     }
 
+    let user_max_tokens = openai_body
+        .get("max_tokens")
+        .or_else(|| openai_body.get("max_completion_tokens"))
+        .and_then(|v| v.as_u64());
+
     let max_output_tokens = if google_model.contains("flash_lite_preview") {
         4096
-    } else if is_thinking_model || has_explicit_budget {
-        let mt = openai_body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        std::cmp::min(std::cmp::max(mt, 64000), 2000000)
-    } else if let Some(mt) = openai_body.get("max_tokens").and_then(|v| v.as_u64()) {
-        std::cmp::min(mt, 2000000)
     } else {
-        4096
+        let ceiling = if google_model.contains("claude") {
+            64000
+        } else if google_model.contains("gpt-oss-120b") {
+            32768
+        } else if google_model.contains("lite") || google_model.contains("gemini-2.5") || google_model == "m50" {
+            65535
+        } else {
+            65536
+        };
+
+        if is_thinking_model || has_explicit_budget {
+            let mt = user_max_tokens.unwrap_or(ceiling);
+            std::cmp::min(std::cmp::max(mt, 64000.min(ceiling)), ceiling)
+        } else if let Some(mt) = user_max_tokens {
+            std::cmp::min(mt, ceiling)
+        } else {
+            4096.min(ceiling)
+        }
     };
 
     let safety_threshold = std::env::var("SAFETY_THRESHOLD").unwrap_or_else(|_| "BLOCK_NONE".to_string());
@@ -1105,10 +1159,12 @@ pub fn transform_to_google_body(
 
     let is_thinking_eligible = is_thinking_model || google_model.contains("gemini-3") || google_model.contains("agent") || google_model.contains("gemini-2.0-flash-thinking-exp");
 
-    // Live-verified 2026-09-05: gemini-3.5-flash-lite (M277) 400s ONLY on
-    // thinkingBudget 0. Budgets 1..16000, -1, level-only, and budget+level
-    // combos all return 200 with visible thought traces. So never force 0:
-    // omit the key when reasoning is disabled, pass through otherwise.
+    // Live-verified 2026-09-07 on gemini-3.5-flash-lite (M277, sandbox):
+    // bare thinkingBudget 0 -> 400 INVALID_ARGUMENT, but budget 0 WITH a
+    // thinkingLevel returns 200 with FULL thought traces (level wins, the 0
+    // is ignored). Omitting thinkingConfig entirely returns 200 with ZERO
+    // thought traces (reproduced 2/2, totalTokenCount 20 vs 23 with traces),
+    // so omit is the true reasoning-off for lite. Never send bare 0.
     let lite_no_disable = google_model == "gemini-3.5-flash-lite" && is_none_reasoning;
 
     if is_none_reasoning && !lite_no_disable && (google_model.contains("gemini-3") || google_model.contains("thinking")) {
@@ -1119,7 +1175,8 @@ pub fn transform_to_google_body(
         google_request.get_mut("generationConfig").unwrap().as_object_mut().unwrap()
             .insert("thinkingConfig".to_string(), thinking_config);
     } else if is_thinking_eligible && !is_none_reasoning {
-        let budget = thinking_budget.unwrap_or(16000);
+        let raw_budget = thinking_budget.unwrap_or(16000);
+        let budget = if raw_budget > 65535 { 65535 } else { raw_budget };
         let mut thinking_config = serde_json::json!({
             "thinkingBudget": budget,
             "includeThoughts": true
@@ -1270,18 +1327,11 @@ pub fn transform_to_google_body(
             } else {
                 let mut tool_config = google_request.get("toolConfig").cloned().unwrap_or_else(|| serde_json::json!({}));
                 tool_config.as_object_mut().unwrap().insert("includeServerSideToolInvocations".to_string(), Value::Bool(true));
-                tool_config.as_object_mut().unwrap().insert("include_server_side_tool_invocations".to_string(), Value::Bool(true));
 
                 let existing_mode = tool_config.get("functionCallingConfig").and_then(|f| f.get("mode")).and_then(|v| v.as_str()).unwrap_or("AUTO").to_string();
                 tool_config.as_object_mut().unwrap().insert("functionCallingConfig".to_string(), serde_json::json!({ "mode": existing_mode }));
 
-                google_request.as_object_mut().unwrap().insert("toolConfig".to_string(), tool_config.clone());
-                google_request.as_object_mut().unwrap().insert("tool_config".to_string(), serde_json::json!({
-                    "include_server_side_tool_invocations": true,
-                    "function_calling_config": {
-                        "mode": existing_mode
-                    }
-                }));
+                google_request.as_object_mut().unwrap().insert("toolConfig".to_string(), tool_config);
             }
         }
     }

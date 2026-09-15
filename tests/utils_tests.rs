@@ -195,9 +195,8 @@ fn test_transform_to_google_body_function_call_has_thought_signature() {
     let func_part = parts.iter().find(|p| p.get("functionCall").is_some()).expect("functionCall part should exist");
     
     assert!(func_part.get("thoughtSignature").is_some(), "thoughtSignature must be present on functionCall part");
-    assert!(func_part.get("thought_signature").is_some(), "thought_signature must be present on functionCall part");
+    assert!(func_part.get("thought_signature").is_none(), "thought_signature must NOT be present (protobuf oneof collision)");
     assert_eq!(func_part["thoughtSignature"], "skip_thought_signature_validator");
-    assert_eq!(func_part["thought_signature"], "skip_thought_signature_validator");
 }
 
 #[test]
@@ -231,7 +230,7 @@ fn test_transform_to_google_body_function_call_with_sig_id() {
     let func_part = parts.iter().find(|p| p.get("functionCall").is_some()).expect("functionCall part should exist");
     
     assert_eq!(func_part["thoughtSignature"], "my_secret_token_123");
-    assert_eq!(func_part["thought_signature"], "my_secret_token_123");
+    assert!(func_part.get("thought_signature").is_none(), "thought_signature must NOT be present (protobuf oneof collision)");
 }
 
 #[test]
@@ -303,9 +302,12 @@ fn test_transform_to_google_body_no_antigravity_system_instruction() {
     });
 
     let transformed = transform_to_google_body(&req, "test-proj", false, None, false);
-    let sys_instr = transformed["request"]["system_instruction"].clone();
+    // Regression: must emit camelCase only; snake_case duplicate causes
+    // 400 "oneof field '_system_instruction' is already set".
+    assert!(transformed["request"].get("system_instruction").is_none(), "system_instruction must NOT be present (protobuf oneof collision)");
+    let sys_instr = transformed["request"]["systemInstruction"].clone();
     let text = sys_instr["parts"][0]["text"].as_str().unwrap();
-    assert_eq!(text, "Custom system instruction");
+    assert!(text.starts_with("Custom system instruction"));
     assert!(!text.contains("You are Antigravity"));
 }
 
