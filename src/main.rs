@@ -412,6 +412,12 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
         "gemini-2.5-pro",
         "claude-opus-4-6-thinking",
         "claude-sonnet-4-6",
+        "claude-opus-5-5-low",
+        "claude-opus-5-5-medium",
+        "claude-opus-5-5-high",
+        "claude-sonnet-5-5-low",
+        "claude-sonnet-5-5-medium",
+        "claude-sonnet-5-5-high",
         "gpt-oss-120b-medium",
         "proactive-observer",
         "m50",
@@ -441,6 +447,11 @@ async fn models_handler(headers: HeaderMap, Query(query): Query<HashMap<String, 
     if !get_effective_features().expose_variants {
         models_array.retain(|id| {
             if id == "gpt-oss-120b-medium" || id == "proactive-observer" || id == "m50" {
+                return true;
+            }
+            // Claude 5-5 exists ONLY with a variant suffix (bare id 404s), so
+            // hiding variants would hide the model entirely. Always expose.
+            if id.contains("5-5") || id.contains("5.5") {
                 return true;
             }
             !(id.ends_with("-high") || id.ends_with("-medium") || id.ends_with("-low") || id.ends_with("-extra-low"))

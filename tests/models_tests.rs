@@ -476,3 +476,24 @@ fn test_future_gemini_4_model_resolution_and_thinking() {
     assert_eq!(google_req_high["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], "high");
     assert_eq!(google_req_high["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 32768);
 }
+
+#[test]
+fn test_claude_55_variant_suffix_preserved() {
+    // Live-verified 2026-10-04 (sandbox): 5-5 exists ONLY with -low/-medium/-high;
+    // bare id 404s, so the transform must not strip the suffix.
+    for model in [
+        "claude-sonnet-5-5-low",
+        "claude-sonnet-5-5-medium",
+        "claude-sonnet-5-5-high",
+        "claude-opus-5-5-low",
+        "claude-opus-5-5-medium",
+        "claude-opus-5-5-high",
+    ] {
+        let body = json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "hi" }]
+        });
+        let google_req = transform_to_google_body(&body, "test-project", false, None, false);
+        assert_eq!(google_req["model"], model, "suffix stripped for {}", model);
+    }
+}

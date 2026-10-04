@@ -448,6 +448,12 @@ pub fn get_original_tool_name(sanitized_name: &str) -> Option<String> {
 // --- Model Resolving & Target Request Payload transform ---
 
 static CLAUDE_MODEL_REGISTRY: &[&str] = &[
+    "claude-sonnet-5-5-low",
+    "claude-sonnet-5-5-medium",
+    "claude-sonnet-5-5-high",
+    "claude-opus-5-5-low",
+    "claude-opus-5-5-medium",
+    "claude-opus-5-5-high",
     "claude-3-7-sonnet-20250219",
     "claude-3-5-sonnet-20241022",
     "claude-3-5-sonnet-v2-20241022",
@@ -572,7 +578,14 @@ pub fn transform_to_google_body(
     base_model = base_model.replace("-preview", "");
 
     if google_model.contains("claude") {
-        google_model = base_model.clone();
+        // Live-verified 2026-10-04 (sandbox): claude 5-5 exists ONLY with a
+        // -low/-medium/-high suffix; the bare id 404s. Preserve the full
+        // resolved id instead of stripping to base.
+        if google_model.contains("5-5") || google_model.contains("5.5") {
+            google_model = resolved_model.clone();
+        } else {
+            google_model = base_model.clone();
+        }
         if google_model == "claude-opus-4-6" {
             google_model = "claude-opus-4-6-thinking".to_string();
         }
@@ -603,7 +616,10 @@ pub fn transform_to_google_body(
                 google_model = base_model;
             }
         } else {
-            google_model = base_model;
+            // Preserve exact 5-5 variant id (see note above); bare 5-5 404s.
+            if !(google_model.contains("5-5") || google_model.contains("5.5")) {
+                google_model = base_model;
+            }
             if google_model == "claude-sonnet-4-6-thinking" || google_model.contains("claude-3-7-sonnet") || google_model.contains("claude-3.7-sonnet") {
                 google_model = "claude-sonnet-4-6".to_string();
             }
@@ -667,6 +683,9 @@ pub fn transform_to_google_body(
             }
         } else if base_model.contains("gemini-3-flash") {
             google_model = "gemini-3-flash".to_string();
+        } else if resolved_model.contains("claude") && (resolved_model.contains("5-5") || resolved_model.contains("5.5")) {
+            // Claude 5-5 (live-verified 2026-10-04): keep exact variant id.
+            google_model = resolved_model.clone();
         } else {
             google_model = base_model.replace("-preview", "");
         }
