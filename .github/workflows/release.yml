@@ -1,83 +1,79 @@
-name: Build & Release Optimized Binaries
+name: Release
 
 on:
   push:
-    branches: [ "master" ]
     tags: [ "v*" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-release:
-    name: Build (${{ matrix.target }})
+  build:
+    name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            asset_name: antigravity-proxy-linux-amd64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            asset_name: antigravity-proxy-linux-arm64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            asset_name: antigravity-proxy-macos-arm64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            asset_name: antigravity-proxy-windows-amd64.exe
-
+          - { name: linux-x86_64, os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { name: macos-arm64, os: macos-latest, target: aarch64-apple-darwin }
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install ARM64 dependencies (Linux)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libssl-dev:arm64 pkg-config
-
-      - name: Cache cargo dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build release binary
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_PATH: "/usr/lib/aarch64-linux-gnu/pkgconfig"
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package
         shell: bash
         run: |
+          D="antigravity-proxy-${{ matrix.name }}"
+          mkdir -p "$D/src"
+          cp -r src/frontend "$D/src/frontend"
+          cp README.md LICENSE NOTICE "$D/"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/antigravity-proxy-rust.exe" "${{ matrix.asset_name }}"
+            cp "target/${{ matrix.target }}/release/antigravity-proxy-rust.exe" "$D/"
+            7z a "$D.zip" "$D" > /dev/null
+            echo "ASSET=$D.zip" >> "$GITHUB_ENV"
           else
-            cp "target/${{ matrix.target }}/release/antigravity-proxy-rust" "${{ matrix.asset_name }}"
-            chmod +x "${{ matrix.asset_name }}"
+            cp "target/${{ matrix.target }}/release/antigravity-proxy-rust" "$D/"
+            tar czf "$D.tar.gz" "$D"
+            echo "ASSET=$D.tar.gz" >> "$GITHUB_ENV"
           fi
 
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: ${{ matrix.asset_name }}
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
 
-      - name: Create Release & Upload Assets
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: ${{ matrix.asset_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
