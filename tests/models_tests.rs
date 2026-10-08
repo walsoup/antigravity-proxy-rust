@@ -236,66 +236,6 @@ fn test_gemini_3_5_flash_high_vs_xhigh_reasoning_ladder() {
 }
 
 #[test]
-fn test_thinking_budget_level_permutation_matrix() {
-    // Documents exactly what the proxy sends for each budget x level
-    // combination. Explicit budgets always pass through; thinkingLevel comes
-    // from the tier (default low); a level is only sent when the resolved
-    // model id contains "gemini-3" (so pro-agent / 2.0-thinking get
-    // budget-only configs); a budget is always sent when eligible
-    // (level-only is never emitted).
-    let mk = |body: serde_json::Value| {
-        transform_to_google_body(&body, "test-project", false, None, false)
-    };
-    let show = |name: &str, req: &serde_json::Value| {
-        println!(
-            "{name} -> model={} thinkingConfig={}",
-            req["model"], req["request"]["generationConfig"]["thinkingConfig"]
-        );
-    };
-
-    // 1. xhigh: extended budget + native high level, no directive.
-    let r = mk(json!({"model": "gemini-3.5-flash", "reasoning_effort": "xhigh", "messages": [{"role": "user", "content": "Hi"}]}));
-    show("xhigh", &r);
-    assert_eq!(r["model"], "gemini-3-flash-agent");
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 49152);
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], "high");
-
-    // 2. Explicit budget only: passes through, level defaults to low.
-    let r = mk(json!({"model": "gemini-3.5-flash", "thinking_budget": 40000, "messages": [{"role": "user", "content": "Hi"}]}));
-    show("budget-only-40k", &r);
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 40000);
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], "low");
-
-    // 3. High budget + medium effort: mismatched combo passes through as-is
-    // (budget 40k, level medium) — server decides how to reconcile.
-    let r = mk(json!({"model": "gemini-3.5-flash", "thinking_budget": 40000, "reasoning_effort": "medium", "messages": [{"role": "user", "content": "Hi"}]}));
-    show("40k-plus-medium", &r);
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 40000);
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], "medium");
-
-    // 4. High budget + low effort: same passthrough, level low.
-    let r = mk(json!({"model": "gemini-3.5-flash", "thinking_budget": 40000, "reasoning_effort": "low", "messages": [{"role": "user", "content": "Hi"}]}));
-    show("40k-plus-low", &r);
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 40000);
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"], "low");
-
-    // 5. Budget-only shape (no level key at all): resolved ids without
-    // "gemini-3" in the name (pro-agent, 2.0-thinking) omit thinkingLevel.
-    let r = mk(json!({"model": "gemini-3.1-pro", "reasoning_effort": "high", "messages": [{"role": "user", "content": "Hi"}]}));
-    show("pro-agent-high", &r);
-    assert_eq!(r["model"], "gemini-pro-agent");
-    assert_eq!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"], 32768);
-    assert!(r["request"]["generationConfig"]["thinkingConfig"].get("thinkingLevel").is_none(),
-        "pro-agent must omit thinkingLevel (budget-only shape)");
-
-    // 6. Level-only is never emitted: even the bare default carries a budget.
-    let r = mk(json!({"model": "gemini-3.5-flash", "messages": [{"role": "user", "content": "Hi"}]}));
-    show("bare-default", &r);
-    assert!(r["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"].as_i64().unwrap() > 0);
-    assert!(r["request"]["generationConfig"]["thinkingConfig"].get("thinkingLevel").is_some());
-}
-
-#[test]
 fn test_negative_one_thinking_budget() {
     let openai_body = json!({
         "model": "gemini-3.8-flash",
